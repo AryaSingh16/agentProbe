@@ -172,6 +172,7 @@ export async function startMatrixJob(payload: {
   intensity: number;
   seed: number;
   seed_count?: number;
+  include_llm?: boolean;
 }): Promise<{ job_id: string; total_runs: number; message: string }> {
   const res = await fetch(`${API_BASE}/matrix`, {
     method: 'POST',

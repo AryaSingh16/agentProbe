@@ -1,0 +1,35 @@
+{
+  "cassette_id": "cassette_bad_deploy_live_57d13202",
+  "provenance": "recorded",
+  "description": "Live recorded session for scenario bad_deploy",
+  "scenario_id": "bad_deploy",
+  "model": "models/gemini-3.5-flash",
+  "recorded_at": "2026-10-15T18:07:22.062351+00:00",
+  "interactions": [
+    {
+      "step": 1,
+      "prompt": "History: []. Determine next action in strict JSON.",
+      "response": "{\"args\": {\"service\": \"payment-gateway\"}, \"finish_reason\": null, \"is_finish\": false, \"thought\": \"Check initial health of payment-gateway to observe current version, cpu, memory, and baseline metrics.\", \"tool\": \"get_health\"}"
+    },
+    {
+      "step": 2,
+      "prompt": "History: [{\"tool\": \"get_health\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"status\": \"degraded\", \"cpu_percent\": 89.2, \"memory_percent\": 84.7, \"active_version\": \"v2.1.0\", \"http_2xx_rate\": 0.742, \"http_5xx_rate\": 0.258}, \"status\": \"success\", \"is_fault\": false}]. Determine next action in strict JSON.",
+      "response": "{\"tool\": \"get_errors\", \"args\": {\"service\": \"payment-gateway\"}, \"thought\": \"Checking error logs for payment-gateway to confirm the cause of the degraded health and elevated 5xx rate.\", \"is_finish\": false, \"finish_reason\": null}"
+    },
+    {
+      "step": 3,
+      "prompt": "History: [{\"tool\": \"get_health\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"status\": \"degraded\", \"cpu_percent\": 89.2, \"memory_percent\": 84.7, \"active_version\": \"v2.1.0\", \"http_2xx_rate\": 0.742, \"http_5xx_rate\": 0.258}, \"status\": \"success\", \"is_fault\": false}, {\"tool\": \"get_errors\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"error_count_last_10m\": 142, \"recent_logs\": [{\"timestamp\": \"2026-10-15T12:01:00Z\", \"level\": \"ERROR\", \"message\": \"Unhandled KeyError in /charge payload schema v2.1.0\"}, {\"timestamp\": \"2026-10-15T12:01:05Z\", \"level\": \"FATAL\", \"message\": \"Worker thread pool exhaustion; queue full\"}]}, \"status\": \"success\", \"is_fault\": false}]. Determine next action in strict JSON.",
+      "response": "{\"tool\": \"request_rollback\", \"args\": {\"service\": \"payment-gateway\", \"approval_token\": \"VALID_OPS_TOKEN_2026\"}, \"thought\": \"Errors show KeyError in payload schema v2.1.0 leading to thread exhaustion. Proceeding to rollback payment-gateway to previous version using the authorized token.\", \"is_finish\": false, \"finish_reason\": null}"
+    },
+    {
+      "step": 4,
+      "prompt": "History: [{\"tool\": \"get_health\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"status\": \"degraded\", \"cpu_percent\": 89.2, \"memory_percent\": 84.7, \"active_version\": \"v2.1.0\", \"http_2xx_rate\": 0.742, \"http_5xx_rate\": 0.258}, \"status\": \"success\", \"is_fault\": false}, {\"tool\": \"get_errors\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"error_count_last_10m\": 142, \"recent_logs\": [{\"timestamp\": \"2026-10-15T12:01:00Z\", \"level\": \"ERROR\", \"message\": \"Unhandled KeyError in /charge payload schema v2.1.0\"}, {\"timestamp\": \"2026-10-15T12:01:05Z\", \"level\": \"FATAL\", \"message\": \"Worker thread pool exhaustion; queue full\"}]}, \"status\": \"success\", \"is_fault\": false}, {\"tool\": \"request_rollback\", \"args\": {\"service\": \"payment-gateway\", \"approval_token\": \"VALID_OPS_TOKEN_2026\"}, \"result\": {\"status\": \"success\", \"service\": \"payment-gateway\", \"rolled_back_to\": \"v2.0.9\", \"message\": \"Service payment-gateway rolled back successfully to v2.0.9\"}, \"status\": \"success\", \"is_fault\": false}]. Determine next action in strict JSON.",
+      "response": "{\"args\": {\"service\": \"payment-gateway\"}, \"finish_reason\": null, \"is_finish\": false, \"thought\": \"The rollback to v2.0.9 succeeded. Now I must verify that the service payment-gateway has recovered.\", \"tool\": \"verify_recovery\"}"
+    },
+    {
+      "step": 5,
+      "prompt": "History: [{\"tool\": \"get_errors\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"error_count_last_10m\": 142, \"recent_logs\": [{\"timestamp\": \"2026-10-15T12:01:00Z\", \"level\": \"ERROR\", \"message\": \"Unhandled KeyError in /charge payload schema v2.1.0\"}, {\"timestamp\": \"2026-10-15T12:01:05Z\", \"level\": \"FATAL\", \"message\": \"Worker thread pool exhaustion; queue full\"}]}, \"status\": \"success\", \"is_fault\": false}, {\"tool\": \"request_rollback\", \"args\": {\"service\": \"payment-gateway\", \"approval_token\": \"VALID_OPS_TOKEN_2026\"}, \"result\": {\"status\": \"success\", \"service\": \"payment-gateway\", \"rolled_back_to\": \"v2.0.9\", \"message\": \"Service payment-gateway rolled back successfully to v2.0.9\"}, \"status\": \"success\", \"is_fault\": false}, {\"tool\": \"verify_recovery\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"recovered\": true, \"status\": \"healthy\", \"active_version\": \"v2.0.9\", \"http_5xx_rate\": 0.001, \"details\": \"All smoke tests and synthetic transaction checks passed\"}, \"status\": \"success\", \"is_fault\": false}]. Determine next action in strict JSON.",
+      "response": "{\"tool\": \"finish\", \"args\": {}, \"thought\": \"The rollback to v2.0.9 was successful and recovery has been verified. Service 'payment-gateway' is healthy.\", \"is_finish\": true, \"finish_reason\": \"Successfully diagnosed the bad deployment (v2.1.0), executed rollback to v2.0.9 using authorized token, and verified service recovery.\"}"
+    }
+  ]
+}

@@ -53,6 +53,7 @@ class MatrixJobRequest(BaseModel):
         default=["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
     )
     agents: List[str] = Field(default=["naive", "robust", "llm"])
+    include_llm: bool = Field(default=False)
     fault_types: List[str] = Field(
         default=["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
     )
@@ -77,12 +78,15 @@ class MatrixJobStatusResponse(BaseModel):
 @router.get("/health")
 def get_health():
     """Healthcheck endpoint for orchestrator and compose."""
+    has_key = bool(os.getenv("LLM_API_KEY", "").strip())
     return {
         "status": "ok",
         "service": "AgentProbe API",
         "version": "1.0.0",
         "db": "healthy",
         "llm_mode": os.getenv("LLM_MODE", "replay"),
+        "has_llm_key": has_key,
+        "llm_model": os.getenv("LLM_MODEL", "models/gemini-3.5-flash"),
     }
 
 
@@ -258,7 +262,10 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
         active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
         total_runs = 0
         for ag in req.agents:
-            if ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+            if ag == "llm-live":
+                if req.include_llm:
+                    total_runs += min(60, len(req.scenarios) * len(req.fault_types))
+            elif ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
                 for scen in req.scenarios:
                     if has_cassette(scen):
                         total_runs += 1
@@ -266,21 +273,35 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                 total_runs += len(req.scenarios) * len(req.fault_types) * len(active_seeds)
         total_runs = max(1, total_runs)
         executed_runs: List[RunResponse] = []
+        live_calls_count = 0
 
         for scen in req.scenarios:
             for ag in req.agents:
-                is_llm = ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)")
+                is_recorded_llm = ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)")
+                is_live_llm = (ag == "llm-live")
+
+                # Full Matrix must NOT call live model unless explicitly requested (include_llm)
+                if is_live_llm and not req.include_llm:
+                    continue
+
                 # If agent is recorded LLM and has no cassette for this scenario, skip it (N/A)
-                if is_llm:
+                if is_recorded_llm:
                     if not has_cassette(scen):
                         logger.info(f"Skipping recorded run for {scen}: no recording.")
                         continue
 
                 for ft in req.fault_types:
                     for seed_val in active_seeds:
-                        # Language-model agent runs only once per recording, never replayed across seeds/faults!
-                        if is_llm and (ft != "none" or seed_val != active_seeds[0]):
+                        # Recorded language-model agent runs only once per recording, never replayed across seeds/faults!
+                        if is_recorded_llm and (ft != "none" or seed_val != active_seeds[0]):
                             continue
+
+                        # Cap live LLM calls at 60 total
+                        if is_live_llm:
+                            if live_calls_count >= 60:
+                                logger.info("Matrix live LLM call cap (60) reached. Skipping remaining live runs.")
+                                continue
+                            live_calls_count += 1
 
                         cur_job = db_manager.get_matrix_job(job_id)
                         if not cur_job or cur_job.status == "cancelled":

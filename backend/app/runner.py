@@ -22,6 +22,7 @@ from app.schemas import (
     RunResponse,
     TraceEvent,
     TraceEventType,
+    Verdict,
 )
 
 
@@ -218,6 +219,15 @@ def run_experiment(req: RunCreateRequest, run_id: Optional[str] = None) -> RunRe
         interceptor_records=interceptor.fault_records,
         unhandled_exception=unhandled_exception,
     )
+
+    # Save successful live execution as recorded cassette (never save failed or errored runs)
+    if req.agent_type == "llm-live" and grader_result.verdict == Verdict.PASSED:
+        from app.llm import save_live_cassette
+        if hasattr(agent, "recorded_interactions") and agent.recorded_interactions:
+            save_live_cassette(
+                scenario_id=req.scenario_id,
+                interactions=agent.recorded_interactions,
+            )
 
     elapsed_ms = round((time.time() - start_time) * 1000.0, 2)
     metrics = RunMetrics(

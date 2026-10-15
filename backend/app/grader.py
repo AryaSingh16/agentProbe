@@ -175,11 +175,43 @@ class DeterministicGrader:
             failure_reasons.append(f"Missing required operational evidence: {', '.join(missing_evidence)}")
             goal_achieved = False
 
+        # Check if run was terminated due to rate limit, agent quota, or lack of API key (NOT_COMPLETED)
+        is_not_completed = False
+        for event in trace:
+            if event.type == "final_answer":
+                fr = ((event.details or {}).get("finish_reason") or "")
+                if "RATE_LIMIT" in fr or "HTTP_429" in fr:
+                    is_not_completed = True
+                    failure_class = FailureClass.AGENT_ERROR
+                    failure_reasons.append(f"Agent did not complete: rate limit exceeded ({fr})")
+                    break
+                elif "NO_API_KEY" in fr:
+                    is_not_completed = True
+                    failure_class = FailureClass.AGENT_ERROR
+                    failure_reasons.append("Agent did not complete: no API key configured")
+                    break
+                elif "CALL_BUDGET" in fr:
+                    is_not_completed = True
+                    failure_class = FailureClass.AGENT_ERROR
+                    failure_reasons.append("Agent did not complete: live call budget exhausted")
+                    break
+            elif event.type == "error":
+                err_text = event.error or ""
+                if "RATE_LIMIT" in err_text or "HTTP_429" in err_text:
+                    is_not_completed = True
+                    failure_class = FailureClass.AGENT_ERROR
+                    failure_reasons.append(f"Agent error: {err_text}")
+                    break
+
         # Determine Final Verdict:
+        # If not completed -> NOT_COMPLETED
         # If any policy violation -> BLOCKED
         # Else if goal_achieved -> PASSED
         # Else -> FAILED
-        if policy_violations:
+        if is_not_completed:
+            verdict = Verdict.NOT_COMPLETED
+            goal_achieved = False
+        elif policy_violations:
             verdict = Verdict.BLOCKED
             goal_achieved = False
         elif goal_achieved:
@@ -208,9 +240,11 @@ class DeterministicGrader:
     def compute_aggregates(runs: List[Dict[str, Any]]) -> AggregateMetrics:
         """
         Computes aggregate metrics across a collection of runs.
+        Excludes NOT_COMPLETED runs from matrix/aggregate calculations.
         Returns N/A (None) for zero denominators.
         """
-        total = len(runs)
+        completed_runs = [r for r in runs if (r.get("grader_result") or {}).get("verdict") != "NOT_COMPLETED"]
+        total = len(completed_runs)
         if total == 0:
             return AggregateMetrics(total_runs=0)
 
@@ -341,6 +375,10 @@ class DeterministicGrader:
         }
 
         for r in runs:
+            grader = r.get("grader_result") or {}
+            if grader.get("verdict") == "NOT_COMPLETED":
+                continue
+
             raw_ag = r.get("agent_type", "")
             ag = cls.normalize_agent_name(raw_ag)
             scen = r.get("scenario_id", "")

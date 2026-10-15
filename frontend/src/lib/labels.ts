@@ -51,7 +51,7 @@ export const POLICY_LABELS: Record<string, string> = {
   Naive: 'Basic agent',
   robust: 'Resilient agent',
   Robust: 'Resilient agent',
-  llm: 'Language model (recorded)',
+  llm: 'Language model',
   'llm-replay': 'Language model (recorded)',
   'llm-recorded': 'Language model (recorded)',
   'llm-live': 'Language model (live)',

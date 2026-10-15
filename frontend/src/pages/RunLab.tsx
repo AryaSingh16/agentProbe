@@ -58,6 +58,8 @@ export const RunLab: React.FC = () => {
 
   const [matrixSeedCount, setMatrixSeedCount] = useState<number>(10);
   const [activeMatrixJobId, setActiveMatrixJobId] = useState<string | null>(null);
+  const [includeLiveLLM, setIncludeLiveLLM] = useState<boolean>(false);
+  const [confirmLiveLLMOpen, setConfirmLiveLLMOpen] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -179,11 +181,12 @@ export const RunLab: React.FC = () => {
     setErrorMessage(null);
     matrixMutation.mutate({
       scenarios: ['healthy_service', 'bad_deploy', 'rollback_denied', 'unfixable_rollback', 'injected_instruction'],
-      agents: ['naive', 'robust', 'llm'],
+      agents: includeLiveLLM ? ['naive', 'robust', 'llm-live'] : ['naive', 'robust'],
       fault_types: ['none', 'timeout', 'http_500', 'malformed_json', 'empty_response', 'transient_then_success'],
       intensity: 2,
       seed,
       seed_count: matrixSeedCount,
+      include_llm: includeLiveLLM,
     });
   };
 
@@ -346,43 +349,67 @@ export const RunLab: React.FC = () => {
               </p>
             </div>
 
-            {/* Language model (recorded) */}
-            <div
-              onClick={() => setAgentType('llm-replay')}
-              className={`p-3 rounded-lg border text-left cursor-pointer transition ${
-                agentType === 'llm-replay' || agentType === 'llm'
-                  ? 'border-purple-600 bg-purple-950/20'
-                  : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-xs text-purple-300">{getPolicyLabel('llm')}</span>
-                <span className="text-[10px] text-slate-400">Recorded session</span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                Deterministic replay of recorded language model sessions across incident scenarios.
-              </p>
-            </div>
-
-            {/* Language model (live) - if enabled */}
-            {health?.llm_mode === 'live' && (
-              <div
-                onClick={() => setAgentType('llm-live')}
-                className={`p-3 rounded-lg border text-left cursor-pointer transition ${
-                  agentType === 'llm-live'
-                    ? 'border-emerald-600 bg-emerald-950/20'
-                    : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-xs text-emerald-300">Language model (live)</span>
-                  <span className="text-[10px] text-slate-400">Live API</span>
+            {/* Language model (live) */}
+            {(() => {
+              const isLiveConfigured = Boolean(health?.has_llm_key || (health?.llm_mode === 'live' && health?.has_llm_key !== false));
+              return (
+                <div
+                  onClick={() => {
+                    if (isLiveConfigured) setAgentType('llm-live');
+                  }}
+                  className={`p-3 rounded-lg border text-left transition ${
+                    !isLiveConfigured
+                      ? 'border-slate-800 bg-slate-900/40 opacity-50 cursor-not-allowed'
+                      : agentType === 'llm-live'
+                      ? 'border-emerald-600 bg-emerald-950/20 cursor-pointer'
+                      : 'border-slate-800 bg-slate-800/40 hover:border-slate-700 cursor-pointer'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`font-semibold text-xs ${isLiveConfigured ? 'text-emerald-300' : 'text-slate-400'}`}>
+                      Language model (live)
+                    </span>
+                    <span className={`text-[10px] ${isLiveConfigured ? 'text-emerald-400' : 'text-rose-400 font-medium'}`}>
+                      {isLiveConfigured ? 'Live API' : 'No API key set'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Real-time tool-calling language model against the simulated operations environment.
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                  Real-time tool-calling language model against the simulated operations environment.
-                </p>
-              </div>
-            )}
+              );
+            })()}
+
+            {/* Language model (recorded) */}
+            {(() => {
+              const hasRealRecordings = Boolean(cassettes?.some((c) => c.provenance === 'recorded'));
+              return (
+                <div
+                  onClick={() => {
+                    if (hasRealRecordings) setAgentType('llm-replay');
+                  }}
+                  className={`p-3 rounded-lg border text-left transition ${
+                    !hasRealRecordings
+                      ? 'border-slate-800 bg-slate-900/40 opacity-50 cursor-not-allowed'
+                      : agentType === 'llm-replay' || agentType === 'llm'
+                      ? 'border-purple-600 bg-purple-950/20 cursor-pointer'
+                      : 'border-slate-800 bg-slate-800/40 hover:border-slate-700 cursor-pointer'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`font-semibold text-xs ${hasRealRecordings ? 'text-purple-300' : 'text-slate-400'}`}>
+                      Language model (recorded)
+                    </span>
+                    <span className={`text-[10px] ${hasRealRecordings ? 'text-purple-400' : 'text-amber-400 font-medium'}`}>
+                      {hasRealRecordings ? 'Recorded session' : 'No recordings yet'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Deterministic replay of recorded language model sessions across incident scenarios.
+                  </p>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Policy Config Options for Resilient Agent */}
@@ -440,16 +467,23 @@ export const RunLab: React.FC = () => {
           {(agentType === 'llm-replay' || agentType === 'llm') && (
             <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800 space-y-2 text-xs">
               <div className="font-semibold text-slate-300">Recorded sessions:</div>
+              {!cassettes?.some((c) => c.provenance === 'recorded') && (
+                <div className="text-[11px] text-slate-400 italic py-1">No recordings yet</div>
+              )}
               {cassettes?.map((c) => {
-                const isLiveModel = c.provenance?.toLowerCase().includes('live') || c.model?.toLowerCase().includes('gemini');
-                const badgeLabel = isLiveModel ? 'Recorded from a live model' : 'Scripted example';
+                const isRealRecorded = c.provenance === 'recorded';
+                const badgeLabel = isRealRecorded ? 'Recorded from a live model' : 'Scripted example';
                 return (
                   <div key={c.cassette_id} className="p-2.5 rounded bg-slate-900 border border-slate-800 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-slate-200">
                         {getScenarioLabel(c.scenario_id)}
                       </span>
-                      <span className="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-amber-300 font-medium border border-slate-700">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                        isRealRecorded
+                          ? 'bg-purple-950/70 border-purple-800 text-purple-300'
+                          : 'bg-slate-800 border-slate-700 text-amber-300'
+                      }`}>
                         {badgeLabel}
                       </span>
                     </div>
@@ -458,6 +492,7 @@ export const RunLab: React.FC = () => {
                       <summary className="cursor-pointer hover:text-slate-300">Technical details</summary>
                       <div className="p-2 mt-1 rounded bg-slate-950 border border-slate-800 text-slate-400 space-y-0.5 font-mono">
                         <div>Session ID: {c.cassette_id}</div>
+                        <div>Provenance: {c.provenance}</div>
                         <div>Model: {c.model}</div>
                         <div>Scenario ID: {c.scenario_id}</div>
                       </div>
@@ -525,7 +560,63 @@ export const RunLab: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div className="space-y-2 pt-4 border-t border-slate-800">
+          <div className="space-y-3 pt-4 border-t border-slate-800">
+            {/* Include language model in matrix toggle */}
+            <div className="p-3 rounded-lg bg-slate-950/50 border border-slate-800 space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={includeLiveLLM}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setConfirmLiveLLMOpen(true);
+                    } else {
+                      setIncludeLiveLLM(false);
+                    }
+                  }}
+                  className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
+                />
+                <span className="text-xs font-semibold text-slate-200">Include language model</span>
+              </label>
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Include live API queries in Full Matrix evaluations (capped at 60 calls max, throttled to 4 req/min).
+              </p>
+
+              {confirmLiveLLMOpen && (
+                <div className="p-2.5 rounded bg-amber-950/40 border border-amber-800 text-amber-200 space-y-2 mt-2">
+                  <div className="flex items-center gap-1.5 font-semibold text-[11px] text-amber-300">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Confirm Live API Calls</span>
+                  </div>
+                  <p className="text-[10px] text-amber-300/90 leading-relaxed">
+                    This will run live requests against the configured LLM API (up to 60 calls maximum).
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIncludeLiveLLM(true);
+                        setConfirmLiveLLMOpen(false);
+                      }}
+                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded text-[10px]"
+                    >
+                      Confirm (Cap 60)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIncludeLiveLLM(false);
+                        setConfirmLiveLLMOpen(false);
+                      }}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={handleRunBaseline}
               disabled={isRunning}

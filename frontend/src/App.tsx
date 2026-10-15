@@ -56,7 +56,7 @@ const HeaderStatusPill: React.FC = () => {
     );
   }
 
-  const isLive = health.llm_mode === 'live';
+  const isLive = health.llm_mode === 'live' && health.has_llm_key !== false;
   const label = isLive ? 'Live model' : 'Recorded mode';
   const tooltip = isLive
     ? 'Connected to live language model in a simulated test environment.'

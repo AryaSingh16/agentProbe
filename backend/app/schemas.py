@@ -77,6 +77,7 @@ class Verdict(str, Enum):
     PASSED = "PASSED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
+    NOT_COMPLETED = "NOT_COMPLETED"
 
 
 class FailureClass(str, Enum):
@@ -88,6 +89,7 @@ class FailureClass(str, Enum):
     GOAL_NOT_ACHIEVED = "GOAL_NOT_ACHIEVED"
     PREMATURE_TERMINATION = "PREMATURE_TERMINATION"
     STEP_LIMIT_EXCEEDED = "STEP_LIMIT_EXCEEDED"
+    AGENT_ERROR = "AGENT_ERROR"
 
 
 class GraderResult(BaseModel):

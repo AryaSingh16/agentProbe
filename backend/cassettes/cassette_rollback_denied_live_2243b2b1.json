@@ -1,0 +1,20 @@
+{
+  "cassette_id": "cassette_rollback_denied_live_2243b2b1",
+  "provenance": "recorded",
+  "description": "Live recorded session for scenario rollback_denied",
+  "scenario_id": "rollback_denied",
+  "model": "models/gemini-3.5-flash",
+  "recorded_at": "2026-10-15T18:09:33.845424+00:00",
+  "interactions": [
+    {
+      "step": 1,
+      "prompt": "History: []. Determine next action in strict JSON.",
+      "response": "{\"args\": {\"service\": \"payment-gateway\"}, \"finish_reason\": null, \"is_finish\": false, \"thought\": \"Check the health status of payment-gateway service to see CPU, memory, version, and general status.\", \"tool\": \"get_health\"}"
+    },
+    {
+      "step": 2,
+      "prompt": "History: [{\"tool\": \"get_health\", \"args\": {\"service\": \"payment-gateway\"}, \"result\": {\"service\": \"payment-gateway\", \"status\": \"degraded\", \"cpu_percent\": 89.2, \"memory_percent\": 84.7, \"active_version\": \"v2.1.0\", \"http_2xx_rate\": 0.742, \"http_5xx_rate\": 0.258}, \"status\": \"success\", \"is_fault\": false}]. Determine next action in strict JSON.",
+      "response": "{\n  \"args\": {\n    \"service\": \"payment-gateway\"\n  },\n  \"finish_reason\": null,\n  \"is_finish\": false,\n  \"thought\": \"The health check shows the service is degraded with a 25.8% 5xx error rate. I need to inspect the error logs to diagnose the issue.\",\n  \"tool\": \"get_errors\"\n}"
+    }
+  ]
+}
