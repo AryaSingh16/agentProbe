@@ -40,13 +40,21 @@ class RunRecord(SQLModel, table=True):
     grader_json: str
     metrics_json: str
     created_at: str = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
+    source: str = Field(default="user", index=True)  # 'user' | 'demo_seed'
+
+
+class SettingRecord(SQLModel, table=True):
+    __tablename__ = "settings"
+
+    key: str = Field(primary_key=True, index=True)
+    value: str
 
 
 class MatrixJobRecord(SQLModel, table=True):
     __tablename__ = "matrix_jobs"
 
     id: str = Field(primary_key=True, index=True)
-    status: str = Field(default="pending", index=True)  # pending, running, completed, failed
+    status: str = Field(default="pending", index=True)  # pending, running, completed, failed, cancelled
     config_json: str
     results_json: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
@@ -57,6 +65,7 @@ class DatabaseManager:
     def __init__(self, db_url: str = DATABASE_URL):
         self.db_url = db_url
         self.engine = None
+        self.data_version: int = 0
         self._init_db()
 
     def _get_sqlite_filepath(self) -> Optional[Path]:
@@ -73,6 +82,18 @@ class DatabaseManager:
         try:
             self.engine = create_engine(self.db_url, connect_args={"check_same_thread": False} if "sqlite" in self.db_url else {})
             SQLModel.metadata.create_all(self.engine)
+            # Additive migration: check if 'source' exists in 'runs'
+            from sqlalchemy import text
+            with self.engine.connect() as conn:
+                try:
+                    columns = [row[1] for row in conn.execute(text("PRAGMA table_info(runs)")).fetchall()]
+                    if columns and "source" not in columns:
+                        conn.execute(text("ALTER TABLE runs ADD COLUMN source VARCHAR DEFAULT 'user'"))
+                        conn.commit()
+                        logger.info("Migrated 'runs' table: added 'source' column.")
+                except Exception as mig_err:
+                    logger.debug(f"Migration probe: {mig_err}")
+
             # Quick integrity probe
             with Session(self.engine) as session:
                 session.exec(select(RunRecord).limit(1)).all()
@@ -99,8 +120,21 @@ class DatabaseManager:
     def get_session(self) -> Session:
         return Session(self.engine)
 
-    def save_run(self, run: RunResponse):
+    def get_setting(self, key: str) -> Optional[str]:
         with self.get_session() as session:
+            rec = session.get(SettingRecord, key)
+            return rec.value if rec else None
+
+    def set_setting(self, key: str, value: str):
+        with self.get_session() as session:
+            rec = SettingRecord(key=key, value=value)
+            session.merge(rec)
+            session.commit()
+            self.data_version += 1
+
+    def save_run(self, run: RunResponse, source: Optional[str] = None):
+        with self.get_session() as session:
+            run_source = source or getattr(run, "source", None) or "user"
             record = RunRecord(
                 id=run.id,
                 scenario_id=run.scenario_id,
@@ -112,9 +146,11 @@ class DatabaseManager:
                 grader_json=json.dumps(run.grader_result.model_dump()),
                 metrics_json=json.dumps(run.metrics.model_dump()),
                 created_at=run.created_at,
+                source=run_source,
             )
             session.merge(record)
             session.commit()
+            self.data_version += 1
 
     def get_run(self, run_id: str) -> Optional[RunResponse]:
         with self.get_session() as session:
@@ -123,30 +159,52 @@ class DatabaseManager:
                 return None
             return self._record_to_response(record)
 
-    def list_runs(self, limit: int = 100, offset: int = 0) -> List[RunResponse]:
+    def list_runs(self, limit: int = 100, offset: int = 0, source: Optional[str] = None) -> List[RunResponse]:
         with self.get_session() as session:
-            query = select(RunRecord).order_by(RunRecord.created_at.desc()).offset(offset).limit(limit)
+            query = select(RunRecord)
+            if source:
+                query = query.where(RunRecord.source == source)
+            query = query.order_by(RunRecord.created_at.desc()).offset(offset).limit(limit)
             records = session.exec(query).all()
             return [self._record_to_response(r) for r in records]
 
-    def list_all_runs(self) -> List[RunResponse]:
+    def list_all_runs(self, source: Optional[str] = None) -> List[RunResponse]:
         with self.get_session() as session:
-            query = select(RunRecord).order_by(RunRecord.created_at.desc())
+            query = select(RunRecord)
+            if source:
+                query = query.where(RunRecord.source == source)
+            query = query.order_by(RunRecord.created_at.desc())
             records = session.exec(query).all()
             return [self._record_to_response(r) for r in records]
+
+    def count_runs(self, source: Optional[str] = None) -> int:
+        from sqlmodel import func
+        with self.get_session() as session:
+            query = select(func.count(RunRecord.id))
+            if source:
+                query = query.where(RunRecord.source == source)
+            res = session.exec(query).one()
+            return res or 0
 
     def clear_runs(self):
         with self.get_session() as session:
             for record in session.exec(select(RunRecord)).all():
                 session.delete(record)
             for job in session.exec(select(MatrixJobRecord)).all():
-                session.delete(job)
+                if job.status in ("pending", "running"):
+                    job.status = "cancelled"
+                    session.merge(job)
+                else:
+                    session.delete(job)
             session.commit()
+            self.set_setting("demo_seed_declined", "true")
+            self.data_version += 1
 
     def save_matrix_job(self, job: MatrixJobRecord):
         with self.get_session() as session:
             session.merge(job)
             session.commit()
+            self.data_version += 1
 
     def get_matrix_job(self, job_id: str) -> Optional[MatrixJobRecord]:
         with self.get_session() as session:
@@ -170,6 +228,7 @@ class DatabaseManager:
             grader_result=grader,
             metrics=metrics,
             created_at=r.created_at,
+            source=getattr(r, "source", "user") or "user",
         )
 
 

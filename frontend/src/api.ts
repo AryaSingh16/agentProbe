@@ -32,8 +32,12 @@ export async function fetchCassettes(): Promise<CassetteMetadata[]> {
   return res.json();
 }
 
-export async function fetchRuns(limit = 100, offset = 0): Promise<RunResponse[]> {
-  const res = await fetch(`${API_BASE}/runs?limit=${limit}&offset=${offset}`);
+export async function fetchRuns(limit = 100, offset = 0, scope?: string): Promise<RunResponse[]> {
+  let url = `${API_BASE}/runs?limit=${limit}&offset=${offset}`;
+  if (scope) {
+    url += `&scope=${encodeURIComponent(scope)}`;
+  }
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch runs');
   return res.json();
 }
@@ -64,7 +68,7 @@ export async function createRun(payload: {
   return res.json();
 }
 
-export async function fetchMetrics(scenarioId?: string): Promise<{
+export async function fetchMetrics(scenarioId?: string, scope: string = 'all'): Promise<{
   aggregates: AggregateMetrics;
   reliability_matrix: Record<string, Record<string, number | null>>;
   reliability_matrix_details?: Record<string, Record<string, any>>;
@@ -73,10 +77,74 @@ export async function fetchMetrics(scenarioId?: string): Promise<{
   baseline_vs_faulted?: Record<string, any>;
   unwinnable_scenarios?: string[];
   selected_scenario?: string;
+  selected_scope?: string;
+  user_runs_count?: number;
+  demo_runs_count?: number;
+  last_run?: {
+    id: string;
+    scenario_id: string;
+    agent_type: string;
+    fault_type: string;
+    verdict: string;
+    faults_recovered: number;
+    faults_encountered: number;
+    delta_text: string;
+  } | null;
 }> {
-  const url = scenarioId && scenarioId !== 'all' ? `${API_BASE}/metrics?scenario_id=${scenarioId}` : `${API_BASE}/metrics`;
-  const res = await fetch(url);
+  const params = new URLSearchParams();
+  if (scenarioId && scenarioId !== 'all') params.append('scenario_id', scenarioId);
+  if (scope) params.append('scope', scope);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE}/metrics${qs}`);
   if (!res.ok) throw new Error('Failed to fetch metrics');
+  return res.json();
+}
+
+export interface ReportData {
+  scope: string;
+  total_runs: number;
+  verdict: 'PASSED' | 'NEEDS_ATTENTION' | 'BLOCKED';
+  verdict_title: string;
+  verdict_rule: string;
+  tiles: Array<{
+    label: string;
+    value: string;
+    raw: string;
+    rate: number | null;
+  }>;
+  findings: Array<{
+    text: string;
+    event_id: string;
+    run_id: string;
+  }>;
+  agent_comparison: Array<{
+    agent: string;
+    runs: number;
+    passed: number;
+    rate: number | null;
+    formatted: string;
+  }>;
+  recommendations: string[];
+  full_details: {
+    methodology: string;
+    aggregates?: any;
+    scenarios_analyzed?: string[];
+  };
+}
+
+export async function fetchReport(scope: string = 'all', runId?: string): Promise<ReportData> {
+  const params = new URLSearchParams();
+  if (scope) params.append('scope', scope);
+  if (runId) params.append('run_id', runId);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const res = await fetch(`${API_BASE}/report${qs}`);
+  if (!res.ok) throw new Error('Failed to fetch structured report');
+  return res.json();
+}
+
+export async function seedDemoData(): Promise<{ status: string; message: string; total_runs: number }> {
+  const res = await fetch(`${API_BASE}/demo/seed`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to load demo data');
   return res.json();
 }
 

@@ -95,6 +95,7 @@ export const RunLab: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['runs-list'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
       queryClient.invalidateQueries({ queryKey: ['history'] });
+      queryClient.invalidateQueries({ queryKey: ['report-data'] });
     }
   }, [matrixStatus?.status, queryClient]);
 
@@ -107,6 +108,7 @@ export const RunLab: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['runs-list'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
       queryClient.invalidateQueries({ queryKey: ['history'] });
+      queryClient.invalidateQueries({ queryKey: ['report-data'] });
       setStatusMessage(`Run completed with verdict: ${data.grader_result.verdict}`);
       setErrorMessage(null);
       // Navigate to trace view

@@ -18,7 +18,7 @@ from app.env import SCENARIOS
 from app.hardening import run_hardening_loop
 from app.llm import load_cassettes
 from app.predictor import predictor_engine
-from app.report import generate_finetune_jsonl, generate_markdown_report
+from app.report import generate_finetune_jsonl, generate_markdown_report, generate_structured_report
 from app.runner import run_experiment
 from app.schemas import (
     AggregateMetrics,
@@ -40,6 +40,9 @@ from app.grader import DeterministicGrader
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["AgentProbe API"])
+
+# Write-invalidated in-memory metrics cache: key -> (data_version, cached_dict)
+_metrics_cache: Dict[str, Any] = {}
 
 
 class MatrixJobRequest(BaseModel):
@@ -98,10 +101,10 @@ def list_cassettes():
 
 @router.post("/runs", response_model=RunResponse)
 def create_run(req: RunCreateRequest):
-    """Execute a single deterministic experiment and persist results."""
+    """Execute a single deterministic experiment and persist results as a user run."""
     try:
         run_res = run_experiment(req)
-        db_manager.save_run(run_res)
+        db_manager.save_run(run_res, source="user")
         return run_res
     except Exception as e:
         logger.error(f"Error executing run: {e}", exc_info=True)
@@ -110,9 +113,18 @@ def create_run(req: RunCreateRequest):
 
 @router.get("/runs", response_model=List[RunResponse])
 @router.get("/history", response_model=List[RunResponse])
-def list_runs(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0)):
-    """List stored runs with pagination (newest first)."""
-    return db_manager.list_runs(limit=limit, offset=offset)
+def list_runs(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    scope: Optional[str] = Query(default=None),
+):
+    """List stored runs with pagination (newest first), optionally filtered by scope ('user' | 'demo_seed')."""
+    source_filter = None
+    if scope == "user":
+        source_filter = "user"
+    elif scope == "demo_seed":
+        source_filter = "demo_seed"
+    return db_manager.list_runs(limit=limit, offset=offset, source=source_filter)
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)
@@ -124,12 +136,16 @@ def get_run(run_id: str):
     return run
 
 
-def ensure_coverage_runs():
+def ensure_coverage_runs(force: bool = False):
     """
     Ensures that the reliability matrix has coverage across empty_response and
     offline replay cassette runs for llm across fault types.
-    Executed once at startup only if cells are missing.
+    Saves runs with source='demo_seed'.
+    Skipped if demo_seed_declined is true and not force.
     """
+    if not force and db_manager.get_setting("demo_seed_declined") == "true":
+        return
+
     runs = db_manager.list_all_runs()
     scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
     all_faults = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
@@ -147,7 +163,7 @@ def ensure_coverage_runs():
                         fault_intensity=1,
                         seed=42,
                     ))
-                    db_manager.save_run(res)
+                    db_manager.save_run(res, source="demo_seed")
                 except Exception as e:
                     logger.warning(f"Failed to seed empty_response run: {e}")
 
@@ -164,43 +180,100 @@ def ensure_coverage_runs():
                         fault_intensity=0 if ft == "none" else 1,
                         seed=42,
                     ))
-                    db_manager.save_run(res)
+                    db_manager.save_run(res, source="demo_seed")
                 except Exception as e:
                     logger.warning(f"Failed to seed llm replay run: {e}")
 
 
-@router.get("/metrics")
-def get_metrics(scenario_id: Optional[str] = None):
-    """Calculate aggregate KPIs and reliability matrix heatmap across stored runs."""
-    runs = db_manager.list_all_runs()
-    analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
+@router.post("/demo/seed")
+def seed_demo_data():
+    """Explicitly loads demo coverage runs when requested by user and resets demo_seed_declined flag."""
+    db_manager.set_setting("demo_seed_declined", "false")
+    ensure_coverage_runs(force=True)
+    return {
+        "status": "ok",
+        "message": "Demo data loaded successfully.",
+        "total_runs": len(db_manager.list_all_runs()),
+    }
 
-    if scenario_id and scenario_id != "all":
-        scen_matrix = analysis.get("matrix_by_scenario", {}).get(scenario_id, analysis["matrix"])
-        scen_details = analysis.get("matrix_details_by_scenario", {}).get(scenario_id, analysis["matrix_details"])
-        filtered_runs = [r for r in runs if r.scenario_id == scenario_id]
-        scen_analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in filtered_runs])
-        return {
-            "aggregates": scen_analysis["aggregates"],
-            "reliability_matrix": scen_matrix,
-            "reliability_matrix_details": scen_details,
-            "matrix_by_scenario": analysis.get("matrix_by_scenario", {}),
-            "matrix_details_by_scenario": analysis.get("matrix_details_by_scenario", {}),
-            "baseline_vs_faulted": scen_analysis["baseline_vs_faulted"],
-            "unwinnable_scenarios": ["unfixable_rollback"],
-            "selected_scenario": scenario_id,
+
+@router.get("/metrics")
+def get_metrics(
+    scenario_id: Optional[str] = None,
+    scope: str = Query(default="all"),  # 'all' | 'user' | 'demo_seed'
+):
+    """
+    Calculate aggregate KPIs and reliability matrix heatmap across stored runs.
+    Uses write-invalidated caching (version-keyed) for instant O(1) response.
+    """
+    cache_key = f"{scenario_id or 'all'}:{scope}"
+    if cache_key in _metrics_cache and _metrics_cache[cache_key][0] == db_manager.data_version:
+        return _metrics_cache[cache_key][1]
+
+    all_runs = db_manager.list_all_runs()
+    user_runs = [r for r in all_runs if r.source == "user"]
+    demo_runs = [r for r in all_runs if r.source == "demo_seed"]
+
+    if scope == "user":
+        target_runs = user_runs
+    elif scope == "demo_seed":
+        target_runs = demo_runs
+    else:
+        target_runs = all_runs
+
+    # Filter by scenario_id if specified
+    filtered_runs = [r for r in target_runs if r.scenario_id == scenario_id] if (scenario_id and scenario_id != "all") else target_runs
+
+    analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in filtered_runs])
+
+    # Compute last run strip for target_runs (or all runs if target is empty)
+    last_run_info = None
+    runs_for_last = target_runs if target_runs else all_runs
+    if runs_for_last:
+        latest = runs_for_last[0]
+        prior_runs = runs_for_last[1:]
+        curr_rate = analysis["aggregates"].get("success_rate", 0.0) or 0.0
+        if prior_runs:
+            prior_filtered = [r for r in prior_runs if r.scenario_id == scenario_id] if (scenario_id and scenario_id != "all") else prior_runs
+            prior_analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in prior_filtered])
+            prior_rate = prior_analysis["aggregates"].get("success_rate", 0.0) or 0.0
+            delta_text = f"Success {prior_rate*100:.1f}% -> {curr_rate*100:.1f}%"
+        else:
+            delta_text = f"Initial run: {curr_rate*100:.1f}%"
+
+        fault_name = latest.fault_schedule[0].type if latest.fault_schedule else "none"
+        last_run_info = {
+            "id": latest.id,
+            "scenario_id": latest.scenario_id,
+            "agent_type": latest.agent_type,
+            "fault_type": fault_name,
+            "verdict": latest.grader_result.verdict,
+            "faults_recovered": latest.grader_result.faults_recovered,
+            "faults_encountered": latest.grader_result.faults_encountered,
+            "delta_text": delta_text,
         }
 
-    return {
+    scen_matrix = analysis.get("matrix_by_scenario", {}).get(scenario_id, analysis["matrix"]) if (scenario_id and scenario_id != "all") else analysis["matrix"]
+    scen_details = analysis.get("matrix_details_by_scenario", {}).get(scenario_id, analysis["matrix_details"]) if (scenario_id and scenario_id != "all") else analysis["matrix_details"]
+
+    res = {
         "aggregates": analysis["aggregates"],
-        "reliability_matrix": analysis["matrix"],
-        "reliability_matrix_details": analysis["matrix_details"],
+        "reliability_matrix": scen_matrix,
+        "reliability_matrix_details": scen_details,
         "matrix_by_scenario": analysis.get("matrix_by_scenario", {}),
         "matrix_details_by_scenario": analysis.get("matrix_details_by_scenario", {}),
         "baseline_vs_faulted": analysis["baseline_vs_faulted"],
         "unwinnable_scenarios": ["unfixable_rollback"],
-        "selected_scenario": "all",
+        "selected_scenario": scenario_id or "all",
+        "selected_scope": scope,
+        "user_runs_count": len(user_runs),
+        "demo_runs_count": len(demo_runs),
+        "last_run": last_run_info,
     }
+
+    _metrics_cache[cache_key] = (db_manager.data_version, res)
+    return res
+
 
 
 def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
@@ -219,6 +292,10 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
             for ag in req.agents:
                 for ft in req.fault_types:
                     for seed_val in active_seeds:
+                        cur_job = db_manager.get_matrix_job(job_id)
+                        if not cur_job or cur_job.status == "cancelled":
+                            logger.info(f"Matrix job {job_id} was cancelled or cleared; aborting execution.")
+                            return
                         f_intensity = 0 if ft == "none" else req.intensity
                         run_req = RunCreateRequest(
                             scenario_id=scen,
@@ -228,7 +305,7 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                             seed=seed_val,
                         )
                         res = run_experiment(run_req)
-                        db_manager.save_run(res)
+                        db_manager.save_run(res, source="user")
                         executed_runs.append(res)
 
                         if len(executed_runs) % 20 == 0:
@@ -400,7 +477,7 @@ def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
             seed=seed,
         )
         res = run_experiment(req)
-        db_manager.save_run(res)
+        db_manager.save_run(res, source="demo_seed")
         generated.append(res.id)
         idx += 1
 
@@ -413,13 +490,54 @@ def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
     }
 
 
+@router.get("/report")
+def get_report(
+    scope: str = Query(default="all"),
+    run_id: Optional[str] = None,
+):
+    """Generate structured report preview for requested scope or individual run."""
+    all_runs = db_manager.list_all_runs()
+    if run_id:
+        target_runs = [r for r in all_runs if r.id == run_id]
+        scope_title = f"Run {run_id[:8]}"
+    elif scope == "latest":
+        target_runs = [all_runs[0]] if all_runs else []
+        scope_title = "Latest run"
+    elif scope == "user":
+        target_runs = [r for r in all_runs if r.source == "user"]
+        scope_title = "My runs"
+    elif scope == "demo_seed":
+        target_runs = [r for r in all_runs if r.source == "demo_seed"]
+        scope_title = "Demo data"
+    else:
+        target_runs = all_runs
+        scope_title = "Current scope"
+
+    return generate_structured_report(target_runs, scope_name=scope_title)
+
+
 @router.get("/export/runs.json")
-def export_runs_json():
-    """Download full JSON archive of runs and aggregated metrics."""
-    runs = db_manager.list_all_runs()
+def export_runs_json(
+    scope: str = Query(default="all"),
+    run_id: Optional[str] = None,
+):
+    """Download full JSON archive of runs and aggregated metrics for the requested scope."""
+    all_runs = db_manager.list_all_runs()
+    if run_id:
+        runs = [r for r in all_runs if r.id == run_id]
+    elif scope == "latest":
+        runs = [all_runs[0]] if all_runs else []
+    elif scope == "user":
+        runs = [r for r in all_runs if r.source == "user"]
+    elif scope == "demo_seed":
+        runs = [r for r in all_runs if r.source == "demo_seed"]
+    else:
+        runs = all_runs
+
     analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
     data = {
         "export_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "scope": scope,
         "aggregates": analysis["aggregates"],
         "runs": [r.model_dump() for r in runs],
     }
@@ -431,9 +549,23 @@ def export_runs_json():
 
 
 @router.get("/export/report.md")
-def export_report_md():
-    """Download Markdown stress-testing report."""
-    runs = db_manager.list_all_runs()
+def export_report_md(
+    scope: str = Query(default="all"),
+    run_id: Optional[str] = None,
+):
+    """Download Markdown stress-testing report for the requested scope."""
+    all_runs = db_manager.list_all_runs()
+    if run_id:
+        runs = [r for r in all_runs if r.id == run_id]
+    elif scope == "latest":
+        runs = [all_runs[0]] if all_runs else []
+    elif scope == "user":
+        runs = [r for r in all_runs if r.source == "user"]
+    elif scope == "demo_seed":
+        runs = [r for r in all_runs if r.source == "demo_seed"]
+    else:
+        runs = all_runs
+
     md_content = generate_markdown_report(runs)
     return Response(
         content=md_content,
@@ -443,9 +575,22 @@ def export_report_md():
 
 
 @router.get("/export/finetune.jsonl")
-def export_finetune_jsonl():
+def export_finetune_jsonl(
+    scope: str = Query(default="all"),
+    run_id: Optional[str] = None,
+):
     """Download sanitized training examples from successful RobustAgent runs only (optional LoRA workflow, not executed)."""
-    runs = db_manager.list_all_runs()
+    all_runs = db_manager.list_all_runs()
+    if run_id:
+        runs = [r for r in all_runs if r.id == run_id]
+    elif scope == "latest":
+        runs = [all_runs[0]] if all_runs else []
+    elif scope == "user":
+        runs = [r for r in all_runs if r.source == "user"]
+    elif scope == "demo_seed":
+        runs = [r for r in all_runs if r.source == "demo_seed"]
+    else:
+        runs = all_runs
     jsonl_content = generate_finetune_jsonl(runs)
     return Response(
         content=jsonl_content,
@@ -462,5 +607,6 @@ def clear_history(confirm: bool = Query(default=False)):
             status_code=400,
             detail="Confirmation required to clear history. Pass ?confirm=true query parameter.",
         )
+    _metrics_cache.clear()
     db_manager.clear_runs()
     return {"status": "ok", "message": "All experiment history cleared successfully."}

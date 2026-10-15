@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { clearHistory, predictRisk } from '../api';
+import { Link } from 'react-router-dom';
+import { clearHistory, fetchReport, fetchRuns, predictRisk, seedDemoData } from '../api';
 import {
   PolicyConfig,
   PredictorPredictResponse,
 } from '../types';
 import {
+  formatRunId,
   getFaultLabel,
+  getPolicyLabel,
   getScenarioLabel,
 } from '../lib/labels';
 import {
@@ -20,9 +21,11 @@ import {
   FileCode,
   FileText,
   Info,
+  ShieldAlert,
   Sliders,
   Trash2,
   TrendingUp,
+  Wrench,
 } from 'lucide-react';
 import {
   BarChart,
@@ -75,12 +78,43 @@ export const InsightsExport: React.FC = () => {
 
   const prediction = riskEstimateQuery.data ?? null;
 
-  // Markdown Report Preview Query
-  const { data: reportPreview, refetch: refetchReport } = useQuery({
-    queryKey: ['report-preview'],
-    queryFn: async () => {
-      const res = await fetch('/api/export/report.md');
-      return res.text();
+  // Report Preview State
+  const [reportScope, setReportScope] = useState<'latest' | 'selected' | 'current'>('latest');
+  const [selectedRunId, setSelectedRunId] = useState<string>('');
+
+  const { data: runsList } = useQuery({
+    queryKey: ['runs-list-for-report'],
+    queryFn: () => fetchRuns(50, 0),
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (!selectedRunId && runsList && runsList.length > 0) {
+      setSelectedRunId(runsList[0].id);
+    }
+  }, [runsList, selectedRunId]);
+
+  const effectiveScope = reportScope === 'current' ? 'all' : (reportScope === 'latest' ? 'latest' : undefined);
+  const effectiveRunId = reportScope === 'selected' ? selectedRunId : undefined;
+
+  const { data: reportData, isLoading: isReportLoading } = useQuery({
+    queryKey: ['report-data', effectiveScope, effectiveRunId],
+    queryFn: () => fetchReport(effectiveScope, effectiveRunId),
+    staleTime: 0,
+  });
+
+  // Seed Demo Data Mutation
+  const [seedSuccessMsg, setSeedSuccessMsg] = useState<string>('');
+  const seedMutation = useMutation({
+    mutationFn: seedDemoData,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list-for-report'] });
+      queryClient.invalidateQueries({ queryKey: ['metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['report-data'] });
+      setSeedSuccessMsg(`Loaded ${data.total_runs} demo runs`);
+      setTimeout(() => setSeedSuccessMsg(''), 3000);
     },
   });
 
@@ -90,12 +124,23 @@ export const InsightsExport: React.FC = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
       queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list-for-report'] });
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['report-data'] });
       setConfirmClearOpen(false);
       setClearInput('');
-      refetchReport();
     },
   });
+
+  const exportParams = new URLSearchParams();
+  if (reportScope === 'selected' && selectedRunId) {
+    exportParams.append('run_id', selectedRunId);
+  } else if (reportScope === 'latest') {
+    exportParams.append('scope', 'latest');
+  } else {
+    exportParams.append('scope', 'all');
+  }
+  const exportQs = exportParams.toString() ? `?${exportParams.toString()}` : '';
 
   const getRiskLevelColor = (level?: string) => {
     switch (level) {
@@ -400,7 +445,7 @@ export const InsightsExport: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
               <a
-                href="/api/export/report.md"
+                href={`/api/export/report.md${exportQs}`}
                 download={`agentprobe-report-${today}.md`}
                 className="p-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-center transition flex flex-col items-center gap-2"
               >
@@ -410,7 +455,7 @@ export const InsightsExport: React.FC = () => {
               </a>
 
               <a
-                href="/api/export/runs.json"
+                href={`/api/export/runs.json${exportQs}`}
                 download={`agentprobe-runs-${today}.json`}
                 className="p-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-center transition flex flex-col items-center gap-2"
               >
@@ -420,7 +465,7 @@ export const InsightsExport: React.FC = () => {
               </a>
 
               <a
-                href="/api/export/finetune.jsonl"
+                href={`/api/export/finetune.jsonl${exportQs}`}
                 download={`agentprobe-finetune-${today}.jsonl`}
                 className="p-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-center transition flex flex-col items-center gap-2"
               >
@@ -431,67 +476,290 @@ export const InsightsExport: React.FC = () => {
             </div>
           </div>
 
-          {/* Clear Run History Card */}
-          <div className="bg-slate-900/90 border border-rose-950/60 rounded-xl p-6 shadow-sm space-y-3">
+          {/* Database Management Card */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm space-y-4">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Trash2 className="w-4 h-4 text-rose-400" /> Reset & Clear History
+              <Database className="w-4 h-4 text-indigo-400" /> Database Management
             </h2>
             <p className="text-xs text-slate-400">
-              Permanently purges all stored run records and matrix caches from database.
+              Manage telemetry persistence, seed deterministic demo datasets, or purge test history.
             </p>
 
-            <button
-              onClick={() => setConfirmClearOpen(true)}
-              className="py-2 px-4 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-200 rounded-lg text-xs font-semibold flex items-center gap-2 transition"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> Clear All Run History
-            </button>
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => seedMutation.mutate()}
+                disabled={seedMutation.isPending}
+                className="py-2 px-4 bg-indigo-950/60 hover:bg-indigo-900 border border-indigo-800 text-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+              >
+                <Database className="w-3.5 h-3.5" />
+                {seedMutation.isPending ? 'Loading demo data...' : 'Load demo data'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setConfirmClearOpen(true)}
+                className="py-2 px-4 bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-200 rounded-lg text-xs font-semibold flex items-center gap-2 transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Clear All Run History
+              </button>
+            </div>
+
+            {seedSuccessMsg && (
+              <div className="text-xs text-emerald-400 flex items-center gap-1.5 pt-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> {seedSuccessMsg}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Report Markdown Preview */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-white flex items-center gap-2">
-            <FileText className="w-4 h-4 text-indigo-400" /> Report preview
-          </h2>
-          <span className="text-xs text-slate-400">Formatted executive summary</span>
+      {/* Structured Report View */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div>
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <FileText className="w-4 h-4 text-indigo-400" /> Reliability Report
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Audited stress-test analysis, safety assertions, and policy recommendations.
+            </p>
+          </div>
+
+          {/* Scope Selector */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-slate-400 font-medium mr-1">Report scope:</span>
+            <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setReportScope('latest')}
+                className={`px-3 py-1 rounded-md font-medium transition ${
+                  reportScope === 'latest'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Latest run
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportScope('selected')}
+                className={`px-3 py-1 rounded-md font-medium transition ${
+                  reportScope === 'selected'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Selected run
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportScope('current')}
+                className={`px-3 py-1 rounded-md font-medium transition ${
+                  reportScope === 'current'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Current scope
+              </button>
+            </div>
+
+            {reportScope === 'selected' && runsList && runsList.length > 0 && (
+              <select
+                value={selectedRunId}
+                onChange={(e) => setSelectedRunId(e.target.value)}
+                className="px-2.5 py-1 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                {runsList.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {formatRunId(r.id)} - {getScenarioLabel(r.scenario_id)} ({getPolicyLabel(r.agent_type)})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
-        <div className="p-5 bg-slate-950 rounded-lg border border-slate-800 text-slate-300 text-xs max-h-96 overflow-y-auto">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              h1: ({ children }) => <h1 className="text-lg font-bold text-white mt-4 mb-2 pb-1 border-b border-slate-800">{children}</h1>,
-              h2: ({ children }) => <h2 className="text-base font-semibold text-slate-100 mt-4 mb-2">{children}</h2>,
-              h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-200 mt-3 mb-1">{children}</h3>,
-              p: ({ children }) => <p className="my-1.5 leading-relaxed text-slate-300">{children}</p>,
-              ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
-              ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
-              li: ({ children }) => <li className="text-slate-300 leading-relaxed">{children}</li>,
-              table: ({ children }) => (
-                <div className="overflow-x-auto my-3">
-                  <table className="w-full text-xs text-left border-collapse border border-slate-800">{children}</table>
+
+        {isReportLoading ? (
+          <div className="py-12 text-center text-xs text-slate-500">
+            Generating reliability report...
+          </div>
+        ) : !reportData ? (
+          <div className="py-12 text-center text-xs text-slate-500">
+            No report data available for this scope. Head over to Run Lab to launch a test.
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* a) Verdict Banner */}
+            <div
+              className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                reportData.verdict === 'PASSED'
+                  ? 'bg-emerald-950/40 border-emerald-800/80 text-emerald-300'
+                  : reportData.verdict === 'BLOCKED'
+                  ? 'bg-purple-950/40 border-purple-800/80 text-purple-300'
+                  : 'bg-amber-950/40 border-amber-800/80 text-amber-300'
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                {reportData.verdict === 'PASSED' ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                ) : reportData.verdict === 'BLOCKED' ? (
+                  <ShieldAlert className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <div className="font-bold text-sm text-white flex items-center gap-2">
+                    <span>{reportData.verdict_title}</span>
+                    <span className="text-xs font-normal opacity-80">({reportData.scope})</span>
+                  </div>
+                  <div className="text-xs mt-1 leading-relaxed opacity-95">
+                    {reportData.verdict_rule}
+                  </div>
                 </div>
-              ),
-              thead: ({ children }) => <thead className="bg-slate-900 border-b border-slate-800 text-slate-200">{children}</thead>,
-              tbody: ({ children }) => <tbody className="divide-y divide-slate-800/80">{children}</tbody>,
-              tr: ({ children }) => <tr className="hover:bg-slate-900/40">{children}</tr>,
-              th: ({ children }) => <th className="py-2 px-3 font-semibold text-slate-300">{children}</th>,
-              td: ({ children }) => <td className="py-2 px-3 text-slate-300">{children}</td>,
-              code: ({ children }) => (
-                <code className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-200 font-mono text-[11px]">
-                  {children}
-                </code>
-              ),
-              blockquote: ({ children }) => (
-                <blockquote className="border-l-2 border-indigo-500 pl-3 my-2 italic text-slate-400">{children}</blockquote>
-              ),
-            }}
-          >
-            {reportPreview || 'No runs to summarize yet.'}
-          </ReactMarkdown>
-        </div>
+              </div>
+              <div className="text-right text-xs shrink-0 self-end sm:self-center font-medium">
+                {reportData.total_runs} {reportData.total_runs === 1 ? 'run evaluated' : 'runs evaluated'}
+              </div>
+            </div>
+
+            {/* b) 4-5 Stat Tiles */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {(reportData.tiles || []).map((tile, i) => (
+                <div key={i} className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+                  <div className="text-[11px] text-slate-400 font-medium mb-1">
+                    {tile.label}
+                  </div>
+                  <div className="text-lg font-bold text-white">
+                    {tile.value}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    {tile.raw}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* c) What happened section */}
+            <div className="space-y-3 pt-2">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Info className="w-4 h-4 text-indigo-400" /> What happened
+              </h3>
+              <div className="bg-slate-950 rounded-lg border border-slate-800 p-4">
+                {reportData.findings && reportData.findings.length > 0 ? (
+                  <ul className="space-y-2 text-xs text-slate-300">
+                    {reportData.findings.map((finding, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0 mt-1.5"></span>
+                        <div className="flex-1 leading-relaxed">
+                          {finding.event_id && finding.event_id !== 'None' && (
+                            <span className="font-semibold text-indigo-300 mr-1.5">
+                              {finding.event_id}:
+                            </span>
+                          )}
+                          <span>{finding.text}</span>
+                          {finding.run_id && (
+                            <Link
+                              to={`/trace?runId=${finding.run_id}`}
+                              className="ml-2 text-indigo-400 hover:text-indigo-300 underline font-medium"
+                            >
+                              Inspect trace
+                            </Link>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-xs text-slate-400">
+                    No incident findings recorded in this evaluation scope.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* d) Agent comparison */}
+            {reportData.agent_comparison && reportData.agent_comparison.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-indigo-400" /> Agent comparison
+                </h3>
+                <div className="overflow-x-auto bg-slate-950 rounded-lg border border-slate-800">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="py-2.5 px-3 font-semibold">Policy</th>
+                        <th className="py-2.5 px-3 text-center font-semibold">Runs evaluated</th>
+                        <th className="py-2.5 px-3 text-center font-semibold">Passed</th>
+                        <th className="py-2.5 px-3 text-right font-semibold">Success rate</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {reportData.agent_comparison.map((ag, i) => (
+                        <tr key={i} className="hover:bg-slate-900/50 transition">
+                          <td className="py-2 px-3 font-medium text-slate-200">
+                            {ag.agent}
+                          </td>
+                          <td className="py-2 px-3 text-center text-slate-400">
+                            {ag.runs}
+                          </td>
+                          <td className="py-2 px-3 text-center text-emerald-400 font-medium">
+                            {ag.passed}
+                          </td>
+                          <td className="py-2 px-3 text-right font-semibold text-white">
+                            {ag.formatted}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* e) What to fix section */}
+            <div className="space-y-3 pt-2">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Wrench className="w-4 h-4 text-emerald-400" /> What to fix
+              </h3>
+              <div className="bg-slate-950 rounded-lg border border-slate-800 p-4">
+                {reportData.recommendations && reportData.recommendations.length > 0 ? (
+                  <ul className="space-y-2.5 text-xs text-slate-300">
+                    {reportData.recommendations.map((rec, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        <span className="leading-relaxed">{rec}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-xs text-slate-400">
+                    No configuration recommendations required. All assertions held.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* f) Collapsed Full details */}
+            <details data-technical-details="true" className="text-xs pt-2">
+              <summary className="cursor-pointer text-slate-400 hover:text-slate-200 font-medium flex items-center gap-1.5">
+                Full details
+              </summary>
+              <div className="p-3 mt-2 rounded bg-slate-950 border border-slate-800 text-slate-400 space-y-2">
+                <div>
+                  <span className="font-semibold text-slate-300">Methodology: </span>
+                  {reportData.full_details?.methodology || 'Empirical stress-testing under controlled fault injections.'}
+                </div>
+                {reportData.full_details?.aggregates && (
+                  <pre className="p-2 bg-slate-900 rounded border border-slate-800 text-[11px] overflow-x-auto text-slate-300">
+                    {JSON.stringify(reportData.full_details.aggregates, null, 2)}
+                  </pre>
+                )}
+              </div>
+            </details>
+          </div>
+        )}
       </div>
 
       {/* Confirmation Modal for Clearing History */}

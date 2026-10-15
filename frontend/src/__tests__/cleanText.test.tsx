@@ -211,6 +211,38 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       json: () => Promise.resolve([mockRun]),
     });
   }
+  if (url.includes('/api/report')) {
+    return Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          scope: 'Latest run',
+          total_runs: 1,
+          verdict: 'PASSED',
+          verdict_title: 'Passed',
+          verdict_rule: 'All assertions held under transient timeout conditions.',
+          tiles: [
+            { label: 'Task success', value: '1/1 (100.0%)', raw: '1 of 1', rate: 1.0 },
+            { label: 'Fault recovery', value: '1/1 (100.0%)', raw: '1 of 1', rate: 1.0 },
+            { label: 'Policy violations', value: '0/1 (0.0%)', raw: '0 of 1', rate: 0.0 },
+            { label: 'Average actions', value: '3.0', raw: '3.0', rate: null },
+            { label: 'Runs analyzed', value: '1 runs', raw: '1 of 1', rate: null },
+          ],
+          findings: [
+            { text: 'Temporary failure on Check health in Bad deployment: agent successfully recovered after 3 actions [Event E02, Run run-123].', event_id: 'E02', run_id: 'run-123' },
+          ],
+          agent_comparison: [
+            { agent: 'Resilient agent', runs: 1, passed: 1, rate: 1.0, formatted: '1/1 (100.0%)' },
+          ],
+          recommendations: [
+            'Configure exponential backoff retries on Check health and error log inspection endpoints.',
+          ],
+          full_details: {
+            methodology: 'Empirical stress testing using deterministic fault schedules.',
+          },
+        }),
+    });
+  }
   if (url.includes('/api/export/report.md')) {
     return Promise.resolve({
       ok: true,

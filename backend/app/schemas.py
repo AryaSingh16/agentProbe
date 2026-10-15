@@ -150,6 +150,7 @@ class RunResponse(BaseModel):
     metrics: RunMetrics
     created_at: str
     provenance: str = "simulator-generated"
+    source: str = "user"
 
 
 class MinimalFaultSet(BaseModel):

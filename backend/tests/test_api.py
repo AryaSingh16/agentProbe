@@ -405,3 +405,114 @@ def test_new_run_appears_first_in_history_and_runs_endpoints():
     assert runs_list[0]["id"] == created_id, f"Expected {created_id} first in /api/runs, got {runs_list[0]['id']}"
 
 
+def test_report_differs_per_run():
+    """Report for run A differs from report for run B."""
+    res_a = client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "robust",
+        "seed": 42,
+    }).json()
+
+    res_b = client.post("/api/runs", json={
+        "scenario_id": "rollback_denied",
+        "agent_type": "naive",
+        "seed": 42,
+    }).json()
+
+    rep_a = client.get(f"/api/report?run_id={res_a['id']}").json()
+    rep_b = client.get(f"/api/report?run_id={res_b['id']}").json()
+
+    assert rep_a["verdict"] != rep_b["verdict"]
+    assert rep_a["verdict"] == "PASSED"
+    assert rep_b["verdict"] == "BLOCKED"
+    assert rep_a["tiles"] != rep_b["tiles"]
+    assert rep_a["findings"] != rep_b["findings"]
+
+
+def test_scope_changes_numbers_and_my_runs_excludes_demo_seeds():
+    """Scope changes the numbers; 'My runs' excludes demo seeds."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+
+    client.post("/api/runs", json={
+        "scenario_id": "healthy_service",
+        "agent_type": "naive",
+        "seed": 42,
+    })
+
+    client.post("/api/demo/seed")
+
+    metrics_user = client.get("/api/metrics?scope=user").json()
+    metrics_demo = client.get("/api/metrics?scope=demo_seed").json()
+    metrics_all = client.get("/api/metrics?scope=all").json()
+
+    assert metrics_user["aggregates"]["total_runs"] == 1
+    assert metrics_user["user_runs_count"] == 1
+    assert metrics_demo["aggregates"]["total_runs"] > 1
+    assert metrics_all["aggregates"]["total_runs"] == metrics_user["aggregates"]["total_runs"] + metrics_demo["aggregates"]["total_runs"]
+    assert metrics_user["aggregates"]["total_runs"] != metrics_all["aggregates"]["total_runs"]
+
+
+def test_clear_restart_stays_empty():
+    """Clear history -> restart stays empty without auto-seeding."""
+    from app.db import db_manager
+    from app.main import lifespan, app
+    import asyncio
+
+    client.delete("/api/history?confirm=true")
+    assert len(db_manager.list_all_runs()) == 0
+    assert db_manager.get_setting("demo_seed_declined") == "true"
+
+    async def simulate_startup():
+        async with lifespan(app):
+            pass
+
+    asyncio.run(simulate_startup())
+    assert len(db_manager.list_all_runs()) == 0
+
+
+def test_metrics_reflect_new_run_immediately_and_delta():
+    """Metrics reflect a new run immediately on next request with correct delta."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+
+    m0 = client.get("/api/metrics?scope=user").json()
+    assert m0["aggregates"]["total_runs"] == 0
+
+    r1 = client.post("/api/runs", json={
+        "scenario_id": "unfixable_rollback",
+        "agent_type": "naive",
+        "seed": 42,
+    }).json()
+
+    m1 = client.get("/api/metrics?scope=user").json()
+    assert m1["aggregates"]["total_runs"] == 1
+    assert m1["last_run"]["id"] == r1["id"]
+    assert "Initial run:" in m1["last_run"]["delta_text"]
+
+    r2 = client.post("/api/runs", json={
+        "scenario_id": "healthy_service",
+        "agent_type": "naive",
+        "seed": 42,
+    }).json()
+
+    m2 = client.get("/api/metrics?scope=user").json()
+    assert m2["aggregates"]["total_runs"] == 2
+    assert m2["last_run"]["id"] == r2["id"]
+    assert "Success 0.0% -> 50.0%" in m2["last_run"]["delta_text"]
+
+
+def test_seed_demo_data_button_populates_db_and_allows_seeding_after_clear():
+    """Explicitly clicking seed demo data populates DB and resets demo_seed_declined."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+    assert db_manager.get_setting("demo_seed_declined") == "true"
+    assert db_manager.count_runs() == 0
+
+    res = client.post("/api/demo/seed")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["total_runs"] > 0
+    assert db_manager.count_runs() > 0
+    assert db_manager.get_setting("demo_seed_declined") == "false"

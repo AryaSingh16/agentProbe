@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { fetchMetrics, fetchRuns } from '../api';
@@ -32,21 +32,66 @@ import {
 
 export const Overview: React.FC = () => {
   const [selectedScenario, setSelectedScenario] = useState<string>('all');
+  const [selectedScope, setSelectedScope] = useState<'user' | 'demo_seed' | 'all'>('all');
+  const hasAutoSelectedScope = useRef<boolean>(false);
 
   const { data: metricsData } = useQuery({
-    queryKey: ['metrics', selectedScenario],
-    queryFn: () => fetchMetrics(selectedScenario),
+    queryKey: ['metrics', selectedScenario, selectedScope],
+    queryFn: () => fetchMetrics(selectedScenario, selectedScope),
+    staleTime: 0,
     refetchInterval: 5000,
   });
 
+  // Default to 'user' once user runs exist
+  useEffect(() => {
+    if (!hasAutoSelectedScope.current && metricsData?.user_runs_count && metricsData.user_runs_count > 0) {
+      setSelectedScope('user');
+      hasAutoSelectedScope.current = true;
+    }
+  }, [metricsData?.user_runs_count]);
+
   const { data: runs } = useQuery({
-    queryKey: ['recent-runs'],
-    queryFn: () => fetchRuns(10, 0),
+    queryKey: ['recent-runs', selectedScope],
+    queryFn: () => fetchRuns(10, 0, selectedScope === 'all' ? undefined : selectedScope),
+    staleTime: 0,
     refetchInterval: 5000,
   });
 
   const aggs = metricsData?.aggregates;
   const heatmap = metricsData?.reliability_matrix || {};
+  const isLowSampleScope = selectedScope === 'user' && (aggs?.total_runs || 0) < 10;
+
+  // Track highlighted cells on matrix value change
+  const prevMatrixRef = useRef<Record<string, Record<string, number | null>>>({});
+  const [highlightedCells, setHighlightedCells] = useState<Set<string>>(new Set());
+
+  const faultTypes = ['none', 'timeout', 'http_500', 'malformed_json', 'empty_response', 'transient_then_success'];
+  const agentKeys = ['naive', 'robust', 'llm'];
+
+  useEffect(() => {
+    if (metricsData?.reliability_matrix) {
+      const changed = new Set<string>();
+      agentKeys.forEach((ag) => {
+        faultTypes.forEach((ft) => {
+          const key = `${ag}:${ft}`;
+          const currentVal = metricsData.reliability_matrix[ag]?.[ft] ?? null;
+          const prevVal = prevMatrixRef.current[ag]?.[ft];
+          if (prevVal !== undefined && prevVal !== currentVal) {
+            changed.add(key);
+          }
+        });
+      });
+      prevMatrixRef.current = metricsData.reliability_matrix;
+      if (changed.size > 0) {
+        setHighlightedCells(changed);
+        const timer = setTimeout(() => {
+          setHighlightedCells(new Set());
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [metricsData?.reliability_matrix]);
+
 
   // Baseline vs faulted unified data
   const bvf = metricsData?.baseline_vs_faulted?.overall;
@@ -84,9 +129,6 @@ export const Overview: React.FC = () => {
     }
   };
 
-  const faultTypes = ['none', 'timeout', 'http_500', 'malformed_json', 'empty_response', 'transient_then_success'];
-  const agentKeys = ['naive', 'robust', 'llm'];
-
   return (
     <div className="space-y-8">
       {/* Header Banner */}
@@ -101,7 +143,44 @@ export const Overview: React.FC = () => {
               Deterministic ops evaluation under controlled fault injection. Compares baseline resilience against transient degradation and prompt injections.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Scope Switch */}
+            <div className="flex items-center bg-slate-950/70 p-1 rounded-lg border border-slate-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedScope('user')}
+                className={`px-3 py-1.5 rounded-md font-medium transition ${
+                  selectedScope === 'user'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                My runs {metricsData?.user_runs_count !== undefined && `(${metricsData.user_runs_count})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedScope('demo_seed')}
+                className={`px-3 py-1.5 rounded-md font-medium transition ${
+                  selectedScope === 'demo_seed'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Demo data {metricsData?.demo_runs_count !== undefined && `(${metricsData.demo_runs_count})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedScope('all')}
+                className={`px-3 py-1.5 rounded-md font-medium transition ${
+                  selectedScope === 'all'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                All
+              </button>
+            </div>
+
             <Link
               to="/lab"
               className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition shadow-lg shadow-indigo-600/20"
@@ -111,6 +190,55 @@ export const Overview: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Last Run Strip */}
+      {metricsData?.last_run && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="flex items-center gap-1.5 text-slate-400 font-medium">
+              <Clock className="w-3.5 h-3.5 text-indigo-400" /> Last run:
+            </span>
+            <span className="font-semibold text-white">
+              {getScenarioLabel(metricsData.last_run.scenario_id)}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-300">
+              {getPolicyLabel(metricsData.last_run.agent_type)}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-400">
+              Fault: {getFaultLabel(metricsData.last_run.fault_type)}
+            </span>
+            <span className="text-slate-600">•</span>
+            <span>
+              {getVerdictBadge(metricsData.last_run.verdict)}
+            </span>
+          </div>
+          {metricsData.last_run.delta_text && (
+            <div className="font-mono text-indigo-300 text-xs bg-indigo-950/60 border border-indigo-800/60 px-2.5 py-1 rounded">
+              {metricsData.last_run.delta_text}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Low Sample Warning Banner */}
+      {isLowSampleScope && (
+        <div className="p-3 bg-amber-950/30 border border-amber-800/50 rounded-xl text-amber-300 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Run more tests to see patterns:</strong> Showing raw counts (x of n) for your personal test runs until you collect at least 10 runs.
+            </span>
+          </div>
+          <Link
+            to="/lab"
+            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-medium shrink-0 transition"
+          >
+            Run test in lab
+          </Link>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -124,9 +252,11 @@ export const Overview: React.FC = () => {
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-white">
-            {aggs?.success_rate !== null && aggs?.success_rate !== undefined
-              ? `${Math.round(aggs.success_rate * 100)}%`
-              : 'N/A'}
+            {isLowSampleScope
+              ? (aggs?.total_runs ? `${aggs.success_count || 0} of ${aggs.total_runs}` : '0 of 0')
+              : (aggs?.success_rate !== null && aggs?.success_rate !== undefined
+                  ? `${Math.round(aggs.success_rate * 100)}%`
+                  : 'N/A')}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
             {aggs?.success_count !== undefined && aggs?.total_runs !== undefined
@@ -145,9 +275,11 @@ export const Overview: React.FC = () => {
             <Wrench className="w-4 h-4 text-amber-400" />
           </div>
           <div className="text-2xl font-bold text-white">
-            {aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
-              ? `${Math.round(aggs.tool_error_rate * 100)}%`
-              : 'N/A'}
+            {isLowSampleScope
+              ? (aggs?.tool_calls_total ? `${aggs.tool_errors_count || 0} of ${aggs.tool_calls_total}` : '0 of 0')
+              : (aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
+                  ? `${Math.round(aggs.tool_error_rate * 100)}%`
+                  : 'N/A')}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
             {aggs?.tool_errors_count !== undefined && aggs?.tool_calls_total !== undefined
@@ -166,9 +298,11 @@ export const Overview: React.FC = () => {
             <Percent className="w-4 h-4 text-indigo-400" />
           </div>
           <div className="text-2xl font-bold text-white">
-            {aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
-              ? `${Math.round(aggs.recovery_rate * 100)}%`
-              : 'N/A'}
+            {isLowSampleScope
+              ? (aggs?.faults_encountered_count ? `${aggs.faults_recovered_count || 0} of ${aggs.faults_encountered_count}` : '0 of 0')
+              : (aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
+                  ? `${Math.round(aggs.recovery_rate * 100)}%`
+                  : 'N/A')}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
             {aggs?.faults_recovered_count !== undefined && aggs?.faults_encountered_count !== undefined
@@ -187,9 +321,11 @@ export const Overview: React.FC = () => {
             <ShieldAlert className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-2xl font-bold text-white">
-            {aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
-              ? `${Math.round(aggs.policy_violation_rate * 100)}%`
-              : '0%'}
+            {isLowSampleScope
+              ? (aggs?.total_runs ? `${aggs.policy_violations_runs || 0} of ${aggs.total_runs}` : '0 of 0')
+              : (aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
+                  ? `${Math.round(aggs.policy_violation_rate * 100)}%`
+                  : '0%')}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
             {aggs?.policy_violations_runs !== undefined && aggs?.total_runs !== undefined
@@ -219,9 +355,11 @@ export const Overview: React.FC = () => {
             <Flame className="w-4 h-4 text-rose-400" />
           </div>
           <div className="text-2xl font-bold text-white">
-            {aggs?.recovery_degradation !== null && aggs?.recovery_degradation !== undefined
-              ? `${Math.round(aggs.recovery_degradation * 100)}%`
-              : 'N/A'}
+            {isLowSampleScope
+              ? 'N/A'
+              : (aggs?.recovery_degradation !== null && aggs?.recovery_degradation !== undefined
+                  ? `${Math.round(aggs.recovery_degradation * 100)}%`
+                  : 'N/A')}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">baseline minus faulted</div>
         </div>
@@ -344,11 +482,16 @@ export const Overview: React.FC = () => {
                           ciTooltip = 'No runs recorded for this cell';
                         }
 
+                        const cellKey = `${agent}:${ft}`;
+                        const isHighlighted = highlightedCells.has(cellKey);
+
                         return (
                           <td key={ft} className="py-2 px-1 text-center">
                             <div
                               title={ciTooltip}
-                              className={`py-1.5 px-1 rounded border text-xs font-semibold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val, isNotApplicable)}`}
+                              className={`py-1.5 px-1 rounded border text-xs font-semibold flex flex-col items-center justify-center cursor-help transition-all duration-300 ${
+                                isHighlighted ? 'ring-2 ring-indigo-400 bg-indigo-900/90 scale-105' : ''
+                              } ${getHeatmapColor(val, isNotApplicable)}`}
                             >
                               <span className={isNotApplicable ? 'text-[10px] font-medium leading-tight' : ''}>{displayVal}</span>
                               {detail && detail.total > 0 && !isNotApplicable && (
