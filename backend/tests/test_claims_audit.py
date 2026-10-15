@@ -51,21 +51,11 @@ def test_no_banned_overclaims_in_codebase():
                                         f"{file_path.relative_to(REPO_ROOT)}:{line_num} -> {line.strip()}"
                                     )
 
-    # Check README.md outside the "What Is and Isn't Claimed" section
+    # Check README.md for banned overclaim phrases
     readme_path = REPO_ROOT / "README.md"
     if readme_path.exists():
         with open(readme_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        in_claims_section = False
-        for line_num, line in enumerate(lines, start=1):
-            if "## ⚖️ What Is and Isn't Claimed" in line:
-                in_claims_section = True
-                continue
-            if in_claims_section and line.startswith("## "):
-                in_claims_section = False
-
-            if not in_claims_section:
+            for line_num, line in enumerate(f, start=1):
                 # Disclaimers are permitted
                 if "not executed" in line.lower() or "not evaluated" in line.lower():
                     continue
@@ -75,4 +65,4 @@ def test_no_banned_overclaims_in_codebase():
                             f"README.md:{line_num} -> {line.strip()}"
                         )
 
-    assert not violations, f"Found banned overclaim phrases outside claims section:\n" + "\n".join(violations)
+    assert not violations, f"Found banned overclaim phrases in codebase:\n" + "\n".join(violations)
