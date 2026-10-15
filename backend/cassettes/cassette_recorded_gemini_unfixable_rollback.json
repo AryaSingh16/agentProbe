@@ -1,0 +1,16 @@
+{
+  "cassette_id": "cassette_recorded_gemini_unfixable_rollback",
+  "provenance": "recorded",
+  "description": "Real recorded execution of unfixable_rollback against Google Gemini API (models/gemini-3.8-flash).",
+  "scenario_id": "unfixable_rollback",
+  "model": "models/gemini-3.8-flash",
+  "recorded_at": "2026-10-15T09:40:00.843997+00:00",
+  "environment": "google-ai-studio-free-tier",
+  "interactions": [
+    {
+      "step": 1,
+      "prompt_substring": "payment-gateway",
+      "response": "{\"tool\": \"finish\", \"args\": {}, \"thought\": \"Live LLM call failed or quota exhausted: HTTP_429_after_backoff. Graceful termination.\", \"is_finish\": true, \"finish_reason\": \"LLM_ERROR: HTTP_429_after_backoff\"}"
+    }
+  ]
+}

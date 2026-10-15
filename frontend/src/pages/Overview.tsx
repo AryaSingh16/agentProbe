@@ -240,15 +240,17 @@ export const Overview: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono">
-                {['naive', 'robust'].map((agent) => {
+                {['naive', 'robust', 'llm'].map((agent) => {
                   const agentData = heatmap[agent] || {};
                   const agentDetails = metricsData?.reliability_matrix_details?.[agent] || {};
+                  const agentLabel = agent === 'llm' ? 'LLM (recorded)' : agent;
+                  const agentBadge = agent === 'llm' ? '(recorded model)' : '(simulated)';
                   return (
                     <tr key={agent} className="hover:bg-slate-800/30 transition">
                       <td className="py-3 px-3 font-semibold text-slate-200 capitalize flex items-center gap-1.5">
-                        <span className={`w-2 h-2 rounded-full ${agent === 'robust' ? 'bg-indigo-400' : 'bg-amber-400'}`}></span>
-                        {agent}
-                        <span className="text-[10px] text-slate-500 lowercase font-normal">(simulated)</span>
+                        <span className={`w-2 h-2 rounded-full ${agent === 'robust' ? 'bg-indigo-400' : agent === 'llm' ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
+                        {agentLabel}
+                        <span className="text-[10px] text-slate-500 lowercase font-normal">{agentBadge}</span>
                       </td>
                       {faultTypes.map((ft) => {
                         const val = agentData[ft];

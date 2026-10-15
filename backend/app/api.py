@@ -46,7 +46,7 @@ class MatrixJobRequest(BaseModel):
     scenarios: List[str] = Field(
         default=["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
     )
-    agents: List[str] = Field(default=["naive", "robust"])
+    agents: List[str] = Field(default=["naive", "robust", "llm"])
     fault_types: List[str] = Field(default=["none", "timeout", "http_500", "malformed_json", "transient_then_success"])
     intensity: int = Field(default=1, ge=0, le=5)
     seed: int = Field(default=42)

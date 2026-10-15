@@ -76,7 +76,7 @@ def run_experiment(req: RunCreateRequest, run_id: Optional[str] = None) -> RunRe
         agent: BaseAgent = NaiveAgent(policy=policy, scenario=scenario_spec)
     elif req.agent_type == "robust":
         agent = RobustAgent(policy=policy, scenario=scenario_spec)
-    elif req.agent_type == "llm-replay":
+    elif req.agent_type in ("llm-replay", "llm", "llm-recorded", "llm (recorded)"):
         agent = LLMAgent(policy=policy, scenario=scenario_spec, mode="replay")
     elif req.agent_type == "llm-live":
         agent = LLMAgent(policy=policy, scenario=scenario_spec, mode="live")

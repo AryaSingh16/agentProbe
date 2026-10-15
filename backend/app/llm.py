@@ -1,13 +1,17 @@
 """
 AgentProbe LLM Adapter: OpenAI-compatible /chat/completions client with offline Replay mode.
-Supports live Ollama/OpenAI API or local honest hand-authored/recorded cassettes.
+Supports live Gemini/OpenAI API or local honest hand-authored/recorded cassettes.
+Includes rate limiting with exponential backoff on 429/5xx, step cap, and 300-call script budget.
+Never logs or leaks API keys.
 """
 import glob
 import json
 import logging
 import os
+import random
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import httpx
 from pydantic import BaseModel, Field
 
@@ -17,10 +21,18 @@ from app.schemas import PolicyConfig, ScenarioSpec
 
 logger = logging.getLogger(__name__)
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434/v1")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "dummy")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "models/gemini-3.8-flash")
+LLM_MODE = os.getenv("LLM_MODE", "replay")
 CASSETTES_DIR = Path(__file__).resolve().parent.parent / "cassettes"
+
+# Global live call budget per execution to prevent quota exhaustion
+LIVE_CALL_BUDGET = 300
+LIVE_CALLS_MADE = 0
+
+# Optional hook for recording live interactions into cassettes
+LIVE_RECORDER_HOOK: Optional[Callable[[str, int, str, str], None]] = None
 
 
 class LLMActionSchema(BaseModel):
@@ -36,7 +48,9 @@ class CassetteMetadata(BaseModel):
     provenance: str  # "recorded" or "hand-authored"
     description: str
     scenario_id: str
-    model: str = "llama3.2:3b"
+    model: str = "models/gemini-3.8-flash"
+    recorded_at: Optional[str] = None
+    environment: Optional[str] = None
     interactions: List[Dict[str, Any]] = []
 
 
@@ -51,22 +65,26 @@ def load_cassettes() -> Dict[str, CassetteMetadata]:
                 data = json.load(f)
                 meta = CassetteMetadata(**data)
                 cassettes[meta.cassette_id] = meta
-                # also key by scenario_id for auto-lookup
-                cassettes[f"scenario_{meta.scenario_id}"] = meta
+                # Prioritize recorded cassettes for scenario matching
+                if meta.provenance == "recorded" or f"scenario_{meta.scenario_id}" not in cassettes:
+                    cassettes[f"scenario_{meta.scenario_id}"] = meta
+                if meta.provenance == "recorded":
+                    cassettes[f"recorded_{meta.scenario_id}"] = meta
         except Exception as e:
-            logger.warning(f"Failed to load cassette {filepath}: {e}")
+            logger.warning(f"Failed to load cassette {filepath.name}: {e}")
     return cassettes
 
 
 class LLMAgent(BaseAgent):
     """
-    LLM Agent supporting live API queries or deterministic offline replay.
+    LLM Agent supporting live API queries with rate limiting and exponential backoff,
+    or deterministic offline replay from recorded and hand-authored cassettes.
     """
     def __init__(
         self,
         policy: PolicyConfig,
         scenario: ScenarioSpec,
-        mode: str = "replay",  # "replay" or "live"
+        mode: str = LLM_MODE,
         cassette_id: Optional[str] = None,
     ):
         super().__init__(policy, scenario)
@@ -102,6 +120,7 @@ Respond ONLY with valid JSON in this schema:
         current_state: Dict[str, Any],
     ) -> AgentAction:
         self.step_count += 1
+        # Hard cap of 10 steps per agent run
         if self.step_count > 10:
             return AgentAction(
                 tool="finish",
@@ -119,6 +138,8 @@ Respond ONLY with valid JSON in this schema:
         target_cassette = None
         if self.cassette_id and self.cassette_id in self.cassettes:
             target_cassette = self.cassettes[self.cassette_id]
+        elif f"recorded_{self.scenario.scenario_id}" in self.cassettes:
+            target_cassette = self.cassettes[f"recorded_{self.scenario.scenario_id}"]
         elif f"scenario_{self.scenario.scenario_id}" in self.cassettes:
             target_cassette = self.cassettes[f"scenario_{self.scenario.scenario_id}"]
 
@@ -173,34 +194,85 @@ Respond ONLY with valid JSON in this schema:
         )
 
     def _live_action(self, history: List[Dict[str, Any]]) -> AgentAction:
+        global LIVE_CALLS_MADE
+        if LIVE_CALLS_MADE >= LIVE_CALL_BUDGET:
+            return AgentAction(
+                tool="finish",
+                thought=f"Live API call budget ({LIVE_CALL_BUDGET}) reached for this execution.",
+                is_finish=True,
+                finish_reason="CALL_BUDGET_EXHAUSTED",
+            )
+
         messages = [
             {"role": "system", "content": self._build_system_prompt()},
             {"role": "user", "content": f"History: {json.dumps(history[-3:] if history else [])}. Determine next action in strict JSON."},
         ]
 
-        try:
-            with httpx.Client(timeout=20.0) as client:
-                headers = {"Authorization": f"Bearer {LLM_API_KEY}"}
-                payload = {
-                    "model": LLM_MODEL,
-                    "messages": messages,
-                    "temperature": 0.0,
-                    "response_format": {"type": "json_object"},
-                }
-                resp = client.post(f"{LLM_BASE_URL}/chat/completions", headers=headers, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return self._parse_llm_json(content)
-        except Exception as e:
-            self.invalid_output_errors += 1
-            logger.warning(f"LLM live invocation failed or timed out: {e}")
-            return AgentAction(
-                tool="finish",
-                thought=f"LLM API error encountered: {type(e).__name__}. Failing safely.",
-                is_finish=True,
-                finish_reason=f"LLM_UNAVAILABLE: {str(e)}",
-            )
+        headers = {
+            "Authorization": f"Bearer {LLM_API_KEY}",
+            "x-goog-api-key": LLM_API_KEY,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        }
+
+        # Exponential backoff with jitter for 429 and 5xx (initial 2s, max 30s, up to 4 retries)
+        last_error = ""
+        for attempt in range(5):
+            try:
+                with httpx.Client(timeout=25.0) as client:
+                    resp = client.post(
+                        f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+
+                    if resp.status_code in (429, 500, 502, 503, 504):
+                        if attempt < 4:
+                            backoff = min(30.0, (2.0 ** attempt) * 2.0 + random.uniform(0.1, 1.0))
+                            logger.warning(
+                                f"LLM API returned status {resp.status_code}. Retrying in {backoff:.1f}s (attempt {attempt + 1}/4)..."
+                            )
+                            time.sleep(backoff)
+                            continue
+                        else:
+                            last_error = f"HTTP_{resp.status_code}_after_backoff"
+                            break
+
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    LIVE_CALLS_MADE += 1
+
+                    # Trigger recorder hook if listening
+                    if LIVE_RECORDER_HOOK is not None:
+                        LIVE_RECORDER_HOOK(
+                            self.scenario.scenario_id,
+                            self.step_count,
+                            messages[-1]["content"][:100],
+                            content,
+                        )
+
+                    return self._parse_llm_json(content)
+            except Exception as e:
+                last_error = str(e)
+                if attempt < 4:
+                    backoff = min(30.0, (2.0 ** attempt) * 2.0 + random.uniform(0.1, 1.0))
+                    time.sleep(backoff)
+                    continue
+                break
+
+        self.invalid_output_errors += 1
+        return AgentAction(
+            tool="finish",
+            thought=f"Live LLM call failed or quota exhausted: {last_error}. Graceful termination.",
+            is_finish=True,
+            finish_reason=f"LLM_ERROR: {last_error}",
+        )
 
     def _parse_llm_json(self, raw_content: str) -> AgentAction:
         clean = raw_content.strip()
