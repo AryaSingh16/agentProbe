@@ -1,0 +1,62 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agentprobe-api
+    restart: unless-stopped
+    ports:
+      - "${PORT_API:-8000}:8000"
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=sqlite:////app/data/agentprobe.db
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://localhost:${PORT_WEB:-3000}
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_API_KEY=dummy
+      - LLM_MODEL=llama3.2:3b
+      - LLM_MODE=replay
+    volumes:
+      - db-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: agentprobe-web
+    restart: unless-stopped
+    ports:
+      - "${PORT_WEB:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+
+  # Optional Ollama LLM service for live model testing
+  # Start with: docker compose --profile llm up --build
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agentprobe-ollama
+    profiles:
+      - llm
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  db-data:
+    name: agentprobe_db_data
+  ollama-data:
+    name: agentprobe_ollama_data

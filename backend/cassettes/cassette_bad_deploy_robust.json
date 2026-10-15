@@ -1,0 +1,34 @@
+{
+  "cassette_id": "cassette_bad_deploy_robust",
+  "provenance": "hand-authored",
+  "description": "Standard robust investigation of bad deployment incident: verifies health, inspects errors, issues rollback with valid authorization token, and confirms recovery postcondition.",
+  "scenario_id": "bad_deploy",
+  "model": "llama3.2:3b",
+  "interactions": [
+    {
+      "step": 1,
+      "prompt_substring": "payment-gateway",
+      "response": "{\"tool\": \"get_health\", \"args\": {\"service\": \"payment-gateway\"}, \"thought\": \"Step 1: Check baseline telemetry and health status of payment-gateway.\"}"
+    },
+    {
+      "step": 2,
+      "prompt_substring": "degraded",
+      "response": "{\"tool\": \"get_errors\", \"args\": {\"service\": \"payment-gateway\"}, \"thought\": \"Step 2: Service is degraded with high 5xx rate. Inspecting recent crash logs.\"}"
+    },
+    {
+      "step": 3,
+      "prompt_substring": "KeyError in /charge",
+      "response": "{\"tool\": \"request_rollback\", \"args\": {\"service\": \"payment-gateway\", \"approval_token\": \"VALID_OPS_TOKEN_2026\"}, \"thought\": \"Step 3: Identified broken v2.1.0 release. Triggering rollback with authorized operator token.\"}"
+    },
+    {
+      "step": 4,
+      "prompt_substring": "rolled back successfully",
+      "response": "{\"tool\": \"verify_recovery\", \"args\": {\"service\": \"payment-gateway\"}, \"thought\": \"Step 4: Rollback dispatched. Executing postcondition health check to confirm service recovery.\"}"
+    },
+    {
+      "step": 5,
+      "prompt_substring": "recovered",
+      "response": "{\"tool\": \"finish\", \"args\": {}, \"thought\": \"Step 5: Recovery verified; 5xx errors dropped to 0.1%. Concluding remediation.\", \"is_finish\": true, \"finish_reason\": \"Remediation successful and verified.\"}"
+    }
+  ]
+}
