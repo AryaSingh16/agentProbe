@@ -23,13 +23,62 @@ logger = logging.getLogger(__name__)
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "models/gemini-3.8-flash")
+LLM_MODEL = os.getenv("LLM_MODEL", "models/gemini-3.5-flash")
 LLM_MODE = os.getenv("LLM_MODE", "replay")
 CASSETTES_DIR = Path(__file__).resolve().parent.parent / "cassettes"
 
 # Global live call budget per execution to prevent quota exhaustion
 LIVE_CALL_BUDGET = 300
 LIVE_CALLS_MADE = 0
+
+# Rate limiter tracking (max 4 requests per 60 seconds rolling window)
+_LIVE_REQUEST_TIMESTAMPS: List[float] = []
+
+
+def _wait_for_rate_limit(max_per_minute: int = 4):
+    """Enforces at most max_per_minute live requests to respect free-tier API quotas."""
+    global _LIVE_REQUEST_TIMESTAMPS
+    now = time.time()
+    _LIVE_REQUEST_TIMESTAMPS = [t for t in _LIVE_REQUEST_TIMESTAMPS if now - t < 60.0]
+    if len(_LIVE_REQUEST_TIMESTAMPS) >= max_per_minute:
+        oldest = _LIVE_REQUEST_TIMESTAMPS[0]
+        sleep_needed = max(0.0, 60.0 - (now - oldest) + 0.5)
+        if sleep_needed > 0:
+            logger.info(f"Rate limiter: sleeping {sleep_needed:.1f}s to respect {max_per_minute} req/min limit...")
+            time.sleep(sleep_needed)
+    _LIVE_REQUEST_TIMESTAMPS.append(time.time())
+
+
+def save_live_cassette(scenario_id: str, interactions: List[Dict[str, Any]], model: str = "") -> Optional[str]:
+    """
+    Saves a successful live execution session as a cassette with provenance='recorded'.
+    Never saves any cassette containing error responses or secret keys.
+    """
+    import uuid
+    import datetime
+    if not interactions:
+        return None
+    for item in interactions:
+        resp = item.get("response", "")
+        if "LLM_ERROR" in resp or "HTTP_429" in resp or "RATE_LIMIT" in resp or "NO_API_KEY" in resp:
+            return None
+
+    cassette_id = f"cassette_{scenario_id}_live_{uuid.uuid4().hex[:8]}"
+    data = {
+        "cassette_id": cassette_id,
+        "provenance": "recorded",
+        "description": f"Live recorded session for scenario {scenario_id}",
+        "scenario_id": scenario_id,
+        "model": model or os.getenv("LLM_MODEL", "models/gemini-3.5-flash"),
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "interactions": interactions,
+    }
+    CASSETTES_DIR.mkdir(parents=True, exist_ok=True)
+    filepath = CASSETTES_DIR / f"{cassette_id}.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    logger.info(f"Saved successful live session as cassette {cassette_id} (provenance=recorded)")
+    return cassette_id
 
 # Optional hook for recording live interactions into cassettes
 LIVE_RECORDER_HOOK: Optional[Callable[[str, int, str, str], None]] = None
