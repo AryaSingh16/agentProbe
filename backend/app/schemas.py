@@ -184,18 +184,24 @@ class PredictorTrainResponse(BaseModel):
     accuracy: float
     auc: Optional[float]
     sample_size: int
-    warning: str = "small-data, not evaluated for production use"
+    warning: str = "simulation data, not evaluated for production use"
     feature_importances: Dict[str, float]
     # Additive fields for honesty & real data requirements
-    status: str = "Insufficient data: metrics are not meaningful"
-    is_insufficient_data: bool = True
-    metrics_meaningful: bool = False
+    status: str = "Simulation-based risk estimation"
+    is_insufficient_data: bool = False
+    metrics_meaningful: bool = True
     class_balance: Dict[str, int] = Field(default_factory=dict)
     majority_class_baseline_accuracy: float = 0.0
     beats_baseline: Optional[bool] = None
     baseline_comparison: str = ""
-    split_strategy: str = "grouped_scenario_seed"
+    split_strategy: str = "leave_one_scenario_out"
     real_runs_only: bool = True
+    unique_configurations_count: int = 0
+    leave_one_scenario_out_accuracy: Optional[float] = None
+    leave_one_fault_out_accuracy: Optional[float] = None
+    estimator_note: str = (
+        "Outcomes in this simulator are deterministic, so high scores are expected and do not show real-world predictive power."
+    )
 
 
 class PredictorPredictRequest(BaseModel):
@@ -209,7 +215,21 @@ class PredictorPredictResponse(BaseModel):
     failure_risk_probability: float
     risk_level: str  # LOW, MEDIUM, HIGH
     contributing_factors: List[str]
-    warning: str = "small-data, not evaluated for production use"
+    warning: str = "simulation-based estimate"
+    model_estimate_probability: Optional[float] = None
+    model_risk_level: Optional[str] = None
+    simulated_check_failures: Optional[int] = None
+    simulated_check_total: Optional[int] = None
+    simulated_check_rate: Optional[float] = None
+    simulated_check_formatted: Optional[str] = None
+    disagreement: Optional[bool] = None
+    unique_configurations_count: Optional[int] = None
+    leave_one_scenario_out_accuracy: Optional[float] = None
+    majority_class_baseline: Optional[float] = None
+    note: Optional[str] = (
+        "Outcomes in this simulator are deterministic, so high scores are expected and do not show real-world predictive power."
+    )
+    per_fault_risks: Optional[Dict[str, float]] = None
 
 
 class MatrixCellStats(BaseModel):

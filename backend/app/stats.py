@@ -21,7 +21,7 @@ def wilson_score_interval(
     # Z-value for 95% two-sided confidence
     # 0.95 -> 1.959963984540054
     z = 1.959963984540054
-    p_hat = successes / total
+    p_hat = min(1.0, max(0.0, successes / total))
 
     denominator = 1.0 + (z**2) / total
     center = (p_hat + (z**2) / (2.0 * total)) / denominator

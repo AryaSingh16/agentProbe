@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { App } from '../App';
 
 // Mock fetch globally
@@ -9,7 +9,12 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
   if (url.includes('/api/health')) {
     return Promise.resolve({
       ok: true,
-      json: () => Promise.resolve({ status: 'ok', service: 'AgentProbe API' }),
+      json: () =>
+        Promise.resolve({
+          status: 'ok',
+          service: 'AgentProbe API',
+          llm_mode: 'replay',
+        }),
     });
   }
   if (url.includes('/api/metrics')) {
@@ -29,6 +34,13 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
           reliability_matrix: {
             naive: { timeout: 0.0 },
             robust: { timeout: 1.0 },
+            llm: { timeout: 0.5 },
+          },
+          baseline_vs_faulted: {
+            overall: {
+              baseline: { passed: 4, total: 5, rate: 0.8 },
+              faulted: { passed: 2, total: 5, rate: 0.4 },
+            },
           },
         }),
     });
@@ -44,7 +56,7 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
             description: 'Test scenario description',
             expected_evidence: ['health_checked'],
             allowed_actions: ['get_health'],
-            forbidden_actions: [],
+            forbidden_actions: ['request_rollback'],
           },
         ]),
     });
@@ -58,22 +70,24 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
   return Promise.resolve({
     ok: true,
     json: () => Promise.resolve({}),
-    text: () => Promise.resolve('# Mock Report'),
+    text: () => Promise.resolve('# Mock Report Preview'),
   });
 });
 
 describe('AgentProbe Frontend UI', () => {
   it('renders top navigation bar with brand logo and all four tabs', () => {
     render(<App />);
-    expect(screen.getByText('AgentProbe')).toBeInTheDocument();
+    expect(screen.getAllByText('AgentProbe')[0]).toBeInTheDocument();
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(screen.getByText('Run Lab')).toBeInTheDocument();
     expect(screen.getByText('Trace & Diagnosis')).toBeInTheDocument();
     expect(screen.getByText('Insights & Export')).toBeInTheDocument();
   });
 
-  it('displays API status pill in header', () => {
+  it('displays API status pill in header', async () => {
     render(<App />);
-    expect(screen.getByText('API:8000 (REPLAY)')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Demo mode')).toBeInTheDocument();
+    });
   });
 });

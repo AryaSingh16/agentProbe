@@ -47,7 +47,9 @@ class MatrixJobRequest(BaseModel):
         default=["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
     )
     agents: List[str] = Field(default=["naive", "robust", "llm"])
-    fault_types: List[str] = Field(default=["none", "timeout", "http_500", "malformed_json", "transient_then_success"])
+    fault_types: List[str] = Field(
+        default=["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
+    )
     intensity: int = Field(default=1, ge=0, le=5)
     seed: int = Field(default=42)
     seed_count: int = Field(default=10, ge=1, le=20)
@@ -121,50 +123,61 @@ def get_run(run_id: str):
     return run
 
 
+def ensure_coverage_runs():
+    """
+    Ensures that the reliability matrix has coverage across empty_response and
+    offline replay cassette runs for llm across fault types.
+    """
+    runs = db_manager.list_all_runs()
+    scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
+    all_faults = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
+
+    # Seed empty_response if missing or under-represented (< 6 runs)
+    empty_runs = [r for r in runs if r.fault_schedule and r.fault_schedule[0].type == "empty_response"]
+    if len(empty_runs) < 6:
+        for scen in scenarios:
+            for ag in ["naive", "robust"]:
+                try:
+                    res = run_experiment(RunCreateRequest(
+                        scenario_id=scen,
+                        agent_type=ag,
+                        fault_type="empty_response",
+                        fault_intensity=1,
+                        seed=42,
+                    ))
+                    db_manager.save_run(res)
+                except Exception as e:
+                    logger.warning(f"Failed to seed empty_response run: {e}")
+
+    # Seed llm replay runs if fewer than 10
+    llm_runs = [r for r in runs if DeterministicGrader.normalize_agent_name(r.agent_type) == "llm"]
+    if len(llm_runs) < 10:
+        for scen in scenarios:
+            for ft in all_faults:
+                try:
+                    res = run_experiment(RunCreateRequest(
+                        scenario_id=scen,
+                        agent_type="llm",
+                        fault_type=None if ft == "none" else ft,
+                        fault_intensity=0 if ft == "none" else 1,
+                        seed=42,
+                    ))
+                    db_manager.save_run(res)
+                except Exception as e:
+                    logger.warning(f"Failed to seed llm replay run: {e}")
+
+
 @router.get("/metrics")
 def get_metrics():
     """Calculate aggregate KPIs and reliability matrix heatmap across stored runs."""
-    from app.stats import format_rate_with_n, wilson_score_interval
-    runs = db_manager.list_runs(limit=2000)
-    aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in runs])
-
-    # Compute heatmap: policy / agent x fault_type -> success_rate and cell details
-    counts: Dict[str, Dict[str, Dict[str, int]]] = {}
-    for r in runs:
-        agent = r.agent_type
-        ftype = r.fault_schedule[0].type if r.fault_schedule else "none"
-        counts.setdefault(agent, {}).setdefault(ftype, {"passed": 0, "total": 0})
-        counts[agent][ftype]["total"] += 1
-        if r.grader_result.verdict == "PASSED":
-            counts[agent][ftype]["passed"] += 1
-
-    formatted_heatmap: Dict[str, Dict[str, Optional[float]]] = {}
-    heatmap_details: Dict[str, Dict[str, Any]] = {}
-
-    for ag, ftypes in counts.items():
-        formatted_heatmap[ag] = {}
-        heatmap_details[ag] = {}
-        for ft, c in ftypes.items():
-            p = c["passed"]
-            t = c["total"]
-            r = round(p / t, 4) if t > 0 else None
-            lower, upper = wilson_score_interval(p, t)
-            formatted_heatmap[ag][ft] = r
-            heatmap_details[ag][ft] = {
-                "passed": p,
-                "total": t,
-                "rate": r,
-                "formatted": format_rate_with_n(p, t),
-                "ci_lower": lower,
-                "ci_upper": upper,
-                "ci_95": [lower, upper] if lower is not None else None,
-                "is_low_sample": (t < 10),
-            }
-
+    ensure_coverage_runs()
+    runs = db_manager.list_all_runs()
+    analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
     return {
-        "aggregates": aggs.model_dump(),
-        "reliability_matrix": formatted_heatmap,
-        "reliability_matrix_details": heatmap_details,
+        "aggregates": analysis["aggregates"],
+        "reliability_matrix": analysis["matrix"],
+        "reliability_matrix_details": analysis["matrix_details"],
+        "baseline_vs_faulted": analysis["baseline_vs_faulted"],
     }
 
 
@@ -196,49 +209,17 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                         db_manager.save_run(res)
                         executed_runs.append(res)
 
-        # Build heatmap and details
-        heatmap: Dict[str, Dict[str, Optional[float]]] = {}
-        heatmap_details: Dict[str, Dict[str, Any]] = {}
-        counts: Dict[str, Dict[str, Dict[str, int]]] = {}
-
-        for r in executed_runs:
-            ag = r.agent_type
-            ft = r.fault_schedule[0].type if r.fault_schedule else "none"
-            counts.setdefault(ag, {}).setdefault(ft, {"passed": 0, "total": 0})
-            counts[ag][ft]["total"] += 1
-            if r.grader_result.verdict == "PASSED":
-                counts[ag][ft]["passed"] += 1
-
-        for ag, fts in counts.items():
-            heatmap[ag] = {}
-            heatmap_details[ag] = {}
-            for ft, c in fts.items():
-                p = c["passed"]
-                t = c["total"]
-                r = round(p / t, 4) if t > 0 else None
-                lower, upper = wilson_score_interval(p, t)
-                heatmap[ag][ft] = r
-                heatmap_details[ag][ft] = {
-                    "passed": p,
-                    "total": t,
-                    "rate": r,
-                    "formatted": format_rate_with_n(p, t),
-                    "ci_lower": lower,
-                    "ci_upper": upper,
-                    "ci_95": [lower, upper] if lower is not None else None,
-                    "is_low_sample": (t < 10),
-                }
-
-        aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in executed_runs])
+        analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in executed_runs])
 
         job.status = "completed"
         job.completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         job.results_json = json.dumps({
             "total_runs": total_runs,
             "completed_runs": len(executed_runs),
-            "heatmap": heatmap,
-            "heatmap_details": heatmap_details,
-            "aggregates": aggs.model_dump(),
+            "heatmap": analysis["matrix"],
+            "heatmap_details": analysis["matrix_details"],
+            "baseline_vs_faulted": analysis["baseline_vs_faulted"],
+            "aggregates": analysis["aggregates"],
         })
         db_manager.save_matrix_job(job)
     except Exception as e:
@@ -400,11 +381,11 @@ def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
 @router.get("/export/runs.json")
 def export_runs_json():
     """Download full JSON archive of runs and aggregated metrics."""
-    runs = db_manager.list_runs(limit=1000)
-    aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in runs])
+    runs = db_manager.list_all_runs()
+    analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
     data = {
         "export_timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "aggregates": aggs.model_dump(),
+        "aggregates": analysis["aggregates"],
         "runs": [r.model_dump() for r in runs],
     }
     return Response(
@@ -417,7 +398,7 @@ def export_runs_json():
 @router.get("/export/report.md")
 def export_report_md():
     """Download Markdown stress-testing report."""
-    runs = db_manager.list_runs(limit=1000)
+    runs = db_manager.list_all_runs()
     md_content = generate_markdown_report(runs)
     return Response(
         content=md_content,
@@ -429,7 +410,7 @@ def export_report_md():
 @router.get("/export/finetune.jsonl")
 def export_finetune_jsonl():
     """Download sanitized training examples from successful RobustAgent runs only (optional LoRA workflow, not executed)."""
-    runs = db_manager.list_runs(limit=1000)
+    runs = db_manager.list_all_runs()
     jsonl_content = generate_finetune_jsonl(runs)
     return Response(
         content=jsonl_content,

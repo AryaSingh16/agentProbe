@@ -85,77 +85,118 @@ def generate_finetune_jsonl(runs: List[RunResponse]) -> str:
 def generate_markdown_report(runs: List[RunResponse]) -> str:
     """
     Produces a detailed executive stress-testing markdown report with sample sizes and Wilson 95% CIs.
+    Uses unified dataset analysis and human-friendly display labels.
     """
-    aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in runs])
+    analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
+    aggs = analysis["aggregates"]
+    matrix_details = analysis["matrix_details"]
+
+    friendly_policies = [
+        ("naive", "Basic agent"),
+        ("robust", "Resilient agent"),
+        ("llm", "Language model (recorded)"),
+    ]
+
+    friendly_faults = [
+        ("none", "No fault"),
+        ("timeout", "Timeout"),
+        ("http_500", "Server error"),
+        ("malformed_json", "Malformed response"),
+        ("empty_response", "Empty response"),
+        ("transient_then_success", "Temporary failure"),
+    ]
+
+    friendly_scenarios = {
+        "healthy_service": "Healthy service",
+        "bad_deploy": "Bad deployment",
+        "rollback_denied": "Unauthorized rollback",
+        "unfixable_rollback": "Rollback can't fix it",
+        "injected_instruction": "Malicious log instruction",
+    }
+
+    friendly_failures = {
+        "UNAUTHORIZED_ACTION": "Unauthorized action",
+        "UNVERIFIED_STATE": "Unverified state",
+        "POLICY_VIOLATION": "Policy violation",
+        "GOAL_NOT_ACHIEVED": "Goal not achieved",
+        "TOOL_FAILURE": "Tool failure",
+        "NONE": "None",
+    }
 
     md = []
     md.append("# AgentProbe Stress-Testing and Reliability Report")
     md.append("")
-    md.append("Generated autonomously by AgentProbe platform.")
-    md.append("")
     md.append("## 1. Executive Summary")
     md.append("")
-    md.append(f"- **Total Experiments Evaluated**: n = {aggs.total_runs}")
+    md.append(f"- **Total Experiments Evaluated**: n = {aggs['total_runs']}")
 
-    succ_ci_str = f" [95% CI: {aggs.success_ci_95[0]*100:.1f}% – {aggs.success_ci_95[1]*100:.1f}%]" if aggs.success_ci_95 else ""
-    md.append(f"- **Overall Task Success Rate**: {aggs.success_formatted}{succ_ci_str}")
+    succ_ci = aggs.get("success_ci_95")
+    succ_ci_str = f" [Likely range (95% CI): {succ_ci[0]*100:.1f}% – {succ_ci[1]*100:.1f}%]" if succ_ci else ""
+    md.append(f"- **Overall Task Success Rate**: {aggs.get('success_formatted', 'N/A')}{succ_ci_str}")
 
-    err_ci_str = f" [95% CI: {aggs.tool_error_ci_95[0]*100:.1f}% – {aggs.tool_error_ci_95[1]*100:.1f}%]" if aggs.tool_error_ci_95 else ""
-    md.append(f"- **Tool Error Rate**: {aggs.tool_error_formatted}{err_ci_str}")
+    err_ci = aggs.get("tool_error_ci_95")
+    err_ci_str = f" [Likely range (95% CI): {err_ci[0]*100:.1f}% – {err_ci[1]*100:.1f}%]" if err_ci else ""
+    md.append(f"- **Tool Error Rate**: {aggs.get('tool_error_formatted', 'N/A')}{err_ci_str}")
 
-    rec_ci_str = f" [95% CI: {aggs.recovery_ci_95[0]*100:.1f}% – {aggs.recovery_ci_95[1]*100:.1f}%]" if aggs.recovery_ci_95 else ""
-    md.append(f"- **Fault Recovery Rate**: {aggs.recovery_formatted}{rec_ci_str}")
+    rec_ci = aggs.get("recovery_ci_95")
+    rec_ci_str = f" [Likely range (95% CI): {rec_ci[0]*100:.1f}% – {rec_ci[1]*100:.1f}%]" if rec_ci else ""
+    md.append(f"- **Fault Recovery Rate**: {aggs.get('recovery_formatted', 'N/A')}{rec_ci_str}")
 
-    viol_ci_str = f" [95% CI: {aggs.policy_violation_ci_95[0]*100:.1f}% – {aggs.policy_violation_ci_95[1]*100:.1f}%]" if aggs.policy_violation_ci_95 else ""
-    md.append(f"- **Policy Violation Rate**: {aggs.policy_violation_formatted}{viol_ci_str}")
+    viol_ci = aggs.get("policy_violation_ci_95")
+    viol_ci_str = f" [Likely range (95% CI): {viol_ci[0]*100:.1f}% – {viol_ci[1]*100:.1f}%]" if viol_ci else ""
+    md.append(f"- **Policy Violation Rate**: {aggs.get('policy_violation_formatted', 'N/A')}{viol_ci_str}")
 
-    md.append(f"- **Avg Tool Calls Per Run**: {aggs.avg_tool_calls if aggs.avg_tool_calls is not None else 'N/A'}")
-    md.append(f"- **Recovery Degradation (Baseline - Faulted)**: {f'{aggs.recovery_degradation * 100:.1f}%' if aggs.recovery_degradation is not None else 'N/A'}")
-    md.append("")
-    md.append("> **Statistical Note**: Naive and Robust are author-written reference policies; this performance gap validates that the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general.")
+    avg_tools = aggs.get("avg_tool_calls")
+    md.append(f"- **Avg Actions Per Run**: {avg_tools if avg_tools is not None else 'N/A'}")
+    degrad = aggs.get("recovery_degradation")
+    md.append(f"- **Drop Under Faults (Baseline - Faulted)**: {f'{degrad * 100:.1f}% points' if degrad is not None else 'N/A'}")
     md.append("")
 
     md.append("## 2. Policy Performance Breakdown")
     md.append("")
-    md.append("| Agent / Policy | Sample Size (Passed/Total) | Success Rate | 95% Wilson CI | Violations | Faults Recovered |")
+    md.append("| Agent / Policy | Sample Size (Passed/Total) | Success Rate | Likely Range (95% CI) | Violations | Faults Recovered |")
     md.append("|---|---|---|---|---|---|")
 
-    # Group by agent_type
-    agents = {}
+    # Group runs by normalized agent
+    agent_runs_map = {"naive": [], "robust": [], "llm": []}
     for r in runs:
-        agents.setdefault(r.agent_type, []).append(r)
+        n_ag = DeterministicGrader.normalize_agent_name(r.agent_type)
+        if n_ag in agent_runs_map:
+            agent_runs_map[n_ag].append(r)
 
-    for agent_name, agent_runs in agents.items():
-        sub_aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in agent_runs])
-        ci_str = f"[{sub_aggs.success_ci_95[0]*100:.1f}%, {sub_aggs.success_ci_95[1]*100:.1f}%]" if sub_aggs.success_ci_95 else "N/A"
-        low_badge = " *(low sample n<10)*" if len(agent_runs) < 10 else ""
-        v_count = sum(len(r.grader_result.policy_violations) for r in agent_runs)
-        rec_count = sum(r.grader_result.faults_recovered for r in agent_runs)
-        md.append(f"| `{agent_name}` | {sub_aggs.success_formatted}{low_badge} | {f'{sub_aggs.success_rate * 100:.1f}%' if sub_aggs.success_rate is not None else 'N/A'} | {ci_str} | {v_count} | {rec_count} |")
+    for ag_id, friendly_name in friendly_policies:
+        a_runs = agent_runs_map.get(ag_id, [])
+        if len(a_runs) < 3:
+            md.append(f"| {friendly_name} | Not enough runs (n < 3) | N/A | N/A | 0 | 0 |")
+        else:
+            sub_aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in a_runs])
+            ci_str = f"[{sub_aggs.success_ci_95[0]*100:.1f}%, {sub_aggs.success_ci_95[1]*100:.1f}%]" if sub_aggs.success_ci_95 else "N/A"
+            low_badge = " *(low sample n<10)*" if len(a_runs) < 10 else ""
+            v_count = sum(len(r.grader_result.policy_violations) for r in a_runs)
+            rec_count = sum(r.grader_result.faults_recovered for r in a_runs)
+            rate_str = f"{sub_aggs.success_rate * 100:.1f}%" if sub_aggs.success_rate is not None else "N/A"
+            md.append(f"| {friendly_name} | {sub_aggs.success_formatted}{low_badge} | {rate_str} | {ci_str} | {v_count} | {rec_count} |")
     md.append("")
 
     md.append("## 3. Reliability Matrix (Policy x Fault Type)")
     md.append("")
-    md.append("| Agent / Policy | Fault Type | Passed / Total | Success Rate | 95% Wilson CI | Sample Status |")
+    md.append("| Agent / Policy | Fault Type | Passed / Total | Success Rate | Likely Range (95% CI) | Sample Status |")
     md.append("|---|---|---|---|---|---|")
-    matrix_cells = {}
-    from app.stats import format_rate_with_n, wilson_score_interval
-    for r in runs:
-        ag = r.agent_type
-        ft = r.fault_schedule[0].type if r.fault_schedule else "none"
-        matrix_cells.setdefault(ag, {}).setdefault(ft, {"passed": 0, "total": 0})
-        matrix_cells[ag][ft]["total"] += 1
-        if r.grader_result.verdict == "PASSED":
-            matrix_cells[ag][ft]["passed"] += 1
 
-    for ag, fts in matrix_cells.items():
-        for ft, c in fts.items():
-            p, t = c["passed"], c["total"]
-            r_str = f"{p/t*100:.1f}%" if t > 0 else "N/A"
-            lower, upper = wilson_score_interval(p, t)
-            ci_str = f"[{lower*100:.1f}%, {upper*100:.1f}%]" if lower is not None else "N/A"
-            status_tag = "**Low sample (n<10)**" if t < 10 else "Adequate sample"
-            md.append(f"| `{ag}` | `{ft}` | {p}/{t} | {r_str} | {ci_str} | {status_tag} |")
+    for ag_id, ag_label in friendly_policies:
+        for ft_id, ft_label in friendly_faults:
+            cell = matrix_details.get(ag_id, {}).get(ft_id, {})
+            t = cell.get("total", 0)
+            p = cell.get("passed", 0)
+            if t == 0:
+                md.append(f"| {ag_label} | {ft_label} | 0/0 | N/A | N/A | No runs yet |")
+            else:
+                r_val = cell.get("rate")
+                r_str = f"{r_val * 100:.1f}%" if r_val is not None else "N/A"
+                ci = cell.get("ci_95")
+                ci_str = f"[{ci[0]*100:.1f}%, {ci[1]*100:.1f}%]" if ci else "N/A"
+                status_tag = "**Low sample (n<10)**" if t < 10 else "Adequate sample"
+                md.append(f"| {ag_label} | {ft_label} | {p}/{t} | {r_str} | {ci_str} | {status_tag} |")
     md.append("")
 
     md.append("## 4. Evaluated Scenarios")
@@ -166,33 +207,42 @@ def generate_markdown_report(runs: List[RunResponse]) -> str:
     for r in runs:
         scenarios.setdefault(r.scenario_id, []).append(r)
 
-    for s_id, s_runs in scenarios.items():
+    for s_id, friendly_s in friendly_scenarios.items():
+        s_runs = scenarios.get(s_id, [])
         p = sum(1 for r in s_runs if r.grader_result.verdict == "PASSED")
         f = sum(1 for r in s_runs if r.grader_result.verdict == "FAILED")
         b = sum(1 for r in s_runs if r.grader_result.verdict == "BLOCKED")
-        md.append(f"| `{s_id}` | {len(s_runs)} | {p} | {f} | {b} |")
+        md.append(f"| {friendly_s} | {len(s_runs)} | {p} | {f} | {b} |")
     md.append("")
 
-    md.append("## 5. Key Failure Classes & Root Cause Observations")
+    md.append("## 5. Observed Failure Categories")
     md.append("")
     failure_counts = {}
     for r in runs:
         fc = r.grader_result.failure_class or "NONE"
         if fc != "NONE":
-            failure_counts[fc] = failure_counts.get(fc, 0) + 1
+            lbl = friendly_failures.get(fc, fc)
+            failure_counts[lbl] = failure_counts.get(lbl, 0) + 1
 
     if failure_counts:
-        for fc, cnt in sorted(failure_counts.items(), key=lambda x: x[1], reverse=True):
-            md.append(f"- **`{fc}`** ({cnt} occurrences): Observed during stress injection or unauthorized actions.")
+        for lbl, cnt in sorted(failure_counts.items(), key=lambda x: x[1], reverse=True):
+            md.append(f"- **{lbl}** ({cnt} occurrences): Observed during stress injection or unauthorized actions.")
     else:
-        md.append("- No failure classes observed across evaluated runs.")
+        md.append("- No failure categories observed across evaluated runs.")
     md.append("")
 
-    md.append("## 5. Security & Boundary Guarantees")
+    md.append("## 6. Security & Boundary Guarantees")
     md.append("")
     md.append("- All operational tooling is executed in-memory with strict schema allowlists.")
     md.append("- Export datasets strip all authorization secrets and omit prompt injections (optional LoRA workflow, not executed).")
     md.append("- No external paid APIs or credentials required.")
+    md.append("")
+
+    md.append("## 7. Methodology & Statistical Notes")
+    md.append("")
+    md.append("- **Confidence Intervals**: 95% Wilson score intervals are computed deterministically for all binomial proportions (Passed/Total). Wilson score intervals provide asymmetric coverage without asymptotic normal approximations, remaining valid even at small sample sizes.")
+    md.append("- **Reference Policy Scope**: Basic and Resilient agents are hand-written reference policies; this performance gap validates that the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general.")
+    md.append("- **Simulation Environment**: All operational telemetry and services are simulated in-memory and state changes carry zero real-world infrastructure side effects.")
     md.append("")
 
     return "\n".join(md)

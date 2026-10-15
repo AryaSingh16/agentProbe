@@ -68,6 +68,7 @@ export async function fetchMetrics(): Promise<{
   aggregates: AggregateMetrics;
   reliability_matrix: Record<string, Record<string, number | null>>;
   reliability_matrix_details?: Record<string, Record<string, any>>;
+  baseline_vs_faulted?: Record<string, any>;
 }> {
   const res = await fetch(`${API_BASE}/metrics`);
   if (!res.ok) throw new Error('Failed to fetch metrics');

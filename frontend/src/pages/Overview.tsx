@@ -3,12 +3,18 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { fetchMetrics, fetchRuns } from '../api';
 import {
+  formatRunId,
+  getFaultLabel,
+  getPolicyLabel,
+  getScenarioLabel,
+} from '../lib/labels';
+import {
   Activity,
-  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Clock,
   Flame,
+  Info,
   Layers,
   Percent,
   ShieldAlert,
@@ -19,20 +25,19 @@ import {
   Bar,
   XAxis,
   YAxis,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   ResponsiveContainer,
-  Legend,
   Cell,
 } from 'recharts';
 
 export const Overview: React.FC = () => {
-  const { data: metricsData, isLoading: metricsLoading, refetch: refetchMetrics } = useQuery({
+  const { data: metricsData } = useQuery({
     queryKey: ['metrics'],
     queryFn: fetchMetrics,
     refetchInterval: 5000,
   });
 
-  const { data: runs, isLoading: runsLoading } = useQuery({
+  const { data: runs } = useQuery({
     queryKey: ['recent-runs'],
     queryFn: () => fetchRuns(10, 0),
     refetchInterval: 5000,
@@ -41,23 +46,20 @@ export const Overview: React.FC = () => {
   const aggs = metricsData?.aggregates;
   const heatmap = metricsData?.reliability_matrix || {};
 
-  // Compute baseline vs faulted chart data
-  const baselineRuns = runs?.filter((r) => r.fault_schedule.length === 0) || [];
-  const faultedRuns = runs?.filter((r) => r.fault_schedule.length > 0) || [];
-
-  const baselinePassed = baselineRuns.filter((r) => r.grader_result.verdict === 'PASSED').length;
-  const faultedPassed = faultedRuns.filter((r) => r.grader_result.verdict === 'PASSED').length;
-
+  // Baseline vs faulted unified data
+  const bvf = metricsData?.baseline_vs_faulted?.overall;
   const chartData = [
     {
-      name: 'Baseline (0 Faults)',
-      successRate: baselineRuns.length > 0 ? Math.round((baselinePassed / baselineRuns.length) * 100) : 0,
-      total: baselineRuns.length,
+      name: 'Baseline',
+      successRate: bvf?.baseline?.rate != null ? Math.round(bvf.baseline.rate * 100) : 0,
+      total: bvf?.baseline?.total || 0,
+      passed: bvf?.baseline?.passed || 0,
     },
     {
-      name: 'Faulted Injections',
-      successRate: faultedRuns.length > 0 ? Math.round((faultedPassed / faultedRuns.length) * 100) : 0,
-      total: faultedRuns.length,
+      name: 'Under faults',
+      successRate: bvf?.faulted?.rate != null ? Math.round(bvf.faulted.rate * 100) : 0,
+      total: bvf?.faulted?.total || 0,
+      passed: bvf?.faulted?.passed || 0,
     },
   ];
 
@@ -80,6 +82,7 @@ export const Overview: React.FC = () => {
   };
 
   const faultTypes = ['none', 'timeout', 'http_500', 'malformed_json', 'empty_response', 'transient_then_success'];
+  const agentKeys = ['naive', 'robust', 'llm'];
 
   return (
     <div className="space-y-8">
@@ -87,7 +90,7 @@ export const Overview: React.FC = () => {
       <div className="border border-indigo-900/40 bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 rounded-xl p-6 shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-indigo-400 font-mono text-xs tracking-wider uppercase mb-1">
+            <div className="flex items-center gap-2 text-indigo-400 text-xs tracking-wider uppercase mb-1 font-semibold">
               <Activity className="w-4 h-4" /> Agent Reliability Command Center
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">System Telemetry & Stress Analytics</h1>
@@ -108,104 +111,116 @@ export const Overview: React.FC = () => {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        {/* Success Rate */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>TASK SUCCESS</span>
+        {/* Task Success */}
+        <div
+          title={aggs?.success_ci_95 ? `Likely range: ${Math.round(aggs.success_ci_95[0] * 100)}% – ${Math.round(aggs.success_ci_95[1] * 100)}%` : undefined}
+          className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm cursor-help"
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Task success</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
-            {aggs?.success_formatted && aggs.success_formatted !== 'N/A'
-              ? aggs.success_formatted
-              : aggs?.success_rate !== null && aggs?.success_rate !== undefined
+          <div className="text-2xl font-bold text-white">
+            {aggs?.success_rate !== null && aggs?.success_rate !== undefined
               ? `${Math.round(aggs.success_rate * 100)}%`
               : 'N/A'}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
-            {aggs?.success_ci_95 ? `95% CI: [${Math.round(aggs.success_ci_95[0]*100)}%, ${Math.round(aggs.success_ci_95[1]*100)}%]` : 'Goal & assertion completion'}
+            {aggs?.success_count !== undefined && aggs?.total_runs !== undefined
+              ? `${aggs.success_count} of ${aggs.total_runs.toLocaleString()} runs`
+              : 'Completed runs'}
           </div>
         </div>
 
         {/* Tool Error Rate */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>TOOL ERROR RATE</span>
+        <div
+          title={aggs?.tool_error_ci_95 ? `Likely range: ${Math.round(aggs.tool_error_ci_95[0] * 100)}% – ${Math.round(aggs.tool_error_ci_95[1] * 100)}%` : undefined}
+          className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm cursor-help"
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Tool error rate</span>
             <Wrench className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
-            {aggs?.tool_error_formatted && aggs.tool_error_formatted !== 'N/A'
-              ? aggs.tool_error_formatted
-              : aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
+          <div className="text-2xl font-bold text-white">
+            {aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
               ? `${Math.round(aggs.tool_error_rate * 100)}%`
               : 'N/A'}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
-            {aggs?.tool_error_ci_95 ? `95% CI: [${Math.round(aggs.tool_error_ci_95[0]*100)}%, ${Math.round(aggs.tool_error_ci_95[1]*100)}%]` : 'Errors per tool call'}
+            {aggs?.tool_errors_count !== undefined && aggs?.tool_calls_total !== undefined
+              ? `${aggs.tool_errors_count} of ${aggs.tool_calls_total.toLocaleString()} calls`
+              : 'Tool errors'}
           </div>
         </div>
 
-        {/* Recovery Rate */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>FAULT RECOVERY</span>
+        {/* Fault Recovery */}
+        <div
+          title={aggs?.recovery_ci_95 ? `Likely range: ${Math.round(aggs.recovery_ci_95[0] * 100)}% – ${Math.round(aggs.recovery_ci_95[1] * 100)}%` : undefined}
+          className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm cursor-help"
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Fault recovery</span>
             <Percent className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
-            {aggs?.recovery_formatted && aggs.recovery_formatted !== 'N/A'
-              ? aggs.recovery_formatted
-              : aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
+          <div className="text-2xl font-bold text-white">
+            {aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
               ? `${Math.round(aggs.recovery_rate * 100)}%`
               : 'N/A'}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
-            {aggs?.recovery_ci_95 ? `95% CI: [${Math.round(aggs.recovery_ci_95[0]*100)}%, ${Math.round(aggs.recovery_ci_95[1]*100)}%]` : 'Encountered faults recovered'}
+            {aggs?.faults_recovered_count !== undefined && aggs?.faults_encountered_count !== undefined
+              ? `${aggs.faults_recovered_count} of ${aggs.faults_encountered_count.toLocaleString()} faults`
+              : 'Faults recovered'}
           </div>
         </div>
 
         {/* Policy Violations */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>POLICY VIOLATIONS</span>
+        <div
+          title={aggs?.policy_violation_ci_95 ? `Likely range: ${Math.round(aggs.policy_violation_ci_95[0] * 100)}% – ${Math.round(aggs.policy_violation_ci_95[1] * 100)}%` : undefined}
+          className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm cursor-help"
+        >
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Policy violations</span>
             <ShieldAlert className="w-4 h-4 text-purple-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
-            {aggs?.policy_violation_formatted && aggs.policy_violation_formatted !== 'N/A'
-              ? aggs.policy_violation_formatted
-              : aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
+          <div className="text-2xl font-bold text-white">
+            {aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
               ? `${Math.round(aggs.policy_violation_rate * 100)}%`
-              : '0/0 (0.0%)'}
+              : '0%'}
           </div>
           <div className="text-[11px] text-slate-400 mt-1">
-            {aggs?.policy_violation_ci_95 ? `95% CI: [${Math.round(aggs.policy_violation_ci_95[0]*100)}%, ${Math.round(aggs.policy_violation_ci_95[1]*100)}%]` : 'Runs triggering BLOCKED'}
+            {aggs?.policy_violations_runs !== undefined && aggs?.total_runs !== undefined
+              ? `${aggs.policy_violations_runs} of ${aggs.total_runs.toLocaleString()} runs`
+              : 'Blocked runs'}
           </div>
         </div>
 
-        {/* Avg Tool Calls */}
+        {/* Avg Actions Per Run */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>AVG TOOL CALLS</span>
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Avg actions per run</span>
             <Layers className="w-4 h-4 text-blue-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
+          <div className="text-2xl font-bold text-white">
             {aggs?.avg_tool_calls !== null && aggs?.avg_tool_calls !== undefined
               ? aggs.avg_tool_calls
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Telemetry trajectory depth</div>
+          <div className="text-[11px] text-slate-400 mt-1">across all completed runs</div>
         </div>
 
-        {/* Recovery Degradation */}
+        {/* Drop Under Faults */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-2">
-            <span>DEGRADATION</span>
+          <div className="flex items-center justify-between text-slate-400 text-xs font-medium mb-1">
+            <span>Drop under faults</span>
             <Flame className="w-4 h-4 text-rose-400" />
           </div>
-          <div className="text-xl font-bold text-white font-mono">
+          <div className="text-2xl font-bold text-white">
             {aggs?.recovery_degradation !== null && aggs?.recovery_degradation !== undefined
               ? `${Math.round(aggs.recovery_degradation * 100)}%`
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Baseline minus faulted delta</div>
+          <div className="text-[11px] text-slate-400 mt-1">baseline minus faulted</div>
         </div>
       </div>
 
@@ -214,65 +229,71 @@ export const Overview: React.FC = () => {
         {/* Reliability Matrix Heatmap (2 cols) */}
         <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                <Layers className="w-4 h-4 text-indigo-400" /> Reliability Matrix Heatmap
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Stress-test success rates with exact sample sizes (n) and 95% Wilson confidence intervals.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="flex items-center gap-1 text-emerald-400"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-800 inline-block"></span> ≥80%</span>
-              <span className="flex items-center gap-1 text-amber-400"><span className="w-2.5 h-2.5 rounded-sm bg-amber-800 inline-block"></span> 40-79%</span>
-              <span className="flex items-center gap-1 text-rose-400"><span className="w-2.5 h-2.5 rounded-sm bg-rose-800 inline-block"></span> &lt;40%</span>
+            <h2 className="text-base font-semibold text-white flex items-center gap-2">
+              <Layers className="w-4 h-4 text-indigo-400" /> Reliability Matrix
+            </h2>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-700 inline-block"></span> ≥80%
+              </span>
+              <span className="flex items-center gap-1.5 text-amber-400">
+                <span className="w-2.5 h-2.5 rounded-sm bg-amber-700 inline-block"></span> 40–79%
+              </span>
+              <span className="flex items-center gap-1.5 text-rose-400">
+                <span className="w-2.5 h-2.5 rounded-sm bg-rose-700 inline-block"></span> &lt;40%
+              </span>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left border-collapse">
+          <div className="w-full">
+            <table className="w-full text-xs text-left border-collapse table-fixed">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2.5 px-3 font-semibold uppercase tracking-wider">Policy / Agent</th>
+                  <th className="py-2.5 px-2 font-semibold w-1/4">Policy</th>
                   {faultTypes.map((ft) => (
-                    <th key={ft} className="py-2.5 px-3 font-mono uppercase text-center">{ft}</th>
+                    <th key={ft} className="py-2.5 px-1 text-center font-medium">
+                      {getFaultLabel(ft)}
+                    </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
-                {['naive', 'robust', 'llm'].map((agent) => {
+              <tbody className="divide-y divide-slate-800/60">
+                {agentKeys.map((agent) => {
                   const agentData = heatmap[agent] || {};
                   const agentDetails = metricsData?.reliability_matrix_details?.[agent] || {};
-                  const agentLabel = agent === 'llm' ? 'LLM (recorded)' : agent;
-                  const agentBadge = agent === 'llm' ? '(recorded model)' : '(simulated)';
+                  const displayAgent = getPolicyLabel(agent);
                   return (
                     <tr key={agent} className="hover:bg-slate-800/30 transition">
-                      <td className="py-3 px-3 font-semibold text-slate-200 capitalize flex items-center gap-1.5">
-                        <span className={`w-2 h-2 rounded-full ${agent === 'robust' ? 'bg-indigo-400' : agent === 'llm' ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
-                        {agentLabel}
-                        <span className="text-[10px] text-slate-500 lowercase font-normal">{agentBadge}</span>
+                      <td className="py-3 px-2 font-medium text-slate-200">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${agent === 'robust' ? 'bg-indigo-400' : agent === 'llm' ? 'bg-purple-400' : 'bg-amber-400'}`}></span>
+                          <span className="truncate">{displayAgent}</span>
+                        </div>
                       </td>
                       {faultTypes.map((ft) => {
                         const val = agentData[ft];
                         const detail = agentDetails[ft];
                         const displayVal = val !== undefined && val !== null ? `${Math.round(val * 100)}%` : 'N/A';
                         const ciTooltip = detail?.ci_lower !== null && detail?.ci_lower !== undefined
-                          ? `Sample: ${detail.passed}/${detail.total} passed\n95% Wilson CI: [${(detail.ci_lower*100).toFixed(1)}%, ${(detail.ci_upper*100).toFixed(1)}%]`
+                          ? `Pass rate: ${detail.passed}/${detail.total} (${displayVal}) • Likely range: ${(detail.ci_lower * 100).toFixed(1)}% – ${(detail.ci_upper * 100).toFixed(1)}%${detail.is_low_sample ? ' • Low sample size (<10 runs)' : ''}`
                           : 'No runs recorded for this cell';
                         return (
-                          <td key={ft} className="py-2 px-2 text-center">
+                          <td key={ft} className="py-2 px-1 text-center">
                             <div
                               title={ciTooltip}
-                              className={`py-1.5 px-2 rounded border text-xs font-bold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val)}`}
+                              className={`py-1.5 px-1 rounded border text-xs font-semibold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val)}`}
                             >
                               <span>{displayVal}</span>
                               {detail && detail.total > 0 && (
-                                <span className="text-[10px] font-normal opacity-80">{detail.passed}/{detail.total}</span>
+                                <span className="text-[10px] font-normal opacity-85">
+                                  {detail.passed}/{detail.total}
+                                </span>
                               )}
                               {detail && detail.is_low_sample && detail.total > 0 && (
-                                <span className="text-[8px] font-sans tracking-tight text-amber-300 bg-amber-950/80 px-1 rounded border border-amber-800/60 mt-0.5">
-                                  low sample (n&lt;10)
-                                </span>
+                                <span
+                                  title="Low sample size (<10 runs)"
+                                  className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block mt-0.5"
+                                ></span>
                               )}
                             </div>
                           </td>
@@ -285,8 +306,12 @@ export const Overview: React.FC = () => {
             </table>
           </div>
 
-          <div className="mt-4 p-3 rounded-lg bg-slate-950/70 border border-slate-800/80 text-[11px] text-slate-400 leading-relaxed">
-            <strong className="text-slate-300 font-semibold">Metrics Note:</strong> Naive and Robust are author-written reference policies; this performance gap validates that the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general.
+          {/* Metrics Note */}
+          <div className="mt-4 p-3 rounded-lg bg-slate-950/70 border border-slate-800/80 text-xs text-slate-400 flex items-start gap-2">
+            <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+            <span>
+              Note: Basic and Resilient agents are author-written reference policies; this performance gap validates that the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general.
+            </span>
           </div>
         </div>
 
@@ -297,16 +322,19 @@ export const Overview: React.FC = () => {
               <Activity className="w-4 h-4 text-emerald-400" /> Baseline vs Faulted
             </h2>
             <p className="text-xs text-slate-400 mb-4">
-              Degradation comparison between pristine executions and active fault injection.
+              Pass rates under pristine baseline conditions versus active fault injection.
             </p>
             <div className="h-52 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <XAxis dataKey="name" stroke="#6b7280" fontSize={11} tickLine={false} />
-                  <YAxis stroke="#6b7280" fontSize={11} domain={[0, 100]} unit="%" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '8px', fontSize: '12px' }}
-                    formatter={(val: any) => [`${val}%`, 'Success Rate']}
+                  <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#94a3b8" fontSize={11} domain={[0, 100]} unit="%" />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '12px' }}
+                    formatter={(val: any, _name: any, item: any) => [
+                      `${val}% (${item.payload.passed}/${item.payload.total} passed)`,
+                      'Pass rate',
+                    ]}
                   />
                   <Bar dataKey="successRate" radius={[4, 4, 0, 0]}>
                     <Cell fill="#10b981" />
@@ -318,8 +346,8 @@ export const Overview: React.FC = () => {
           </div>
 
           <div className="mt-4 pt-4 border-t border-slate-800 text-xs text-slate-400 flex items-center justify-between">
-            <span>Total Experiments Evaluated:</span>
-            <span className="font-mono text-white font-bold">{aggs?.total_runs || 0}</span>
+            <span>Total completed runs:</span>
+            <span className="text-white font-bold">{aggs?.total_runs || 0}</span>
           </div>
         </div>
       </div>
@@ -329,7 +357,7 @@ export const Overview: React.FC = () => {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Clock className="w-4 h-4 text-indigo-400" /> Recent Experiment Runs
+              <Clock className="w-4 h-4 text-indigo-400" /> Recent Runs
             </h2>
             <p className="text-xs text-slate-400">
               Deterministic runs with trace recordings and automated grading assertions.
@@ -346,40 +374,42 @@ export const Overview: React.FC = () => {
               <tr className="border-b border-slate-800 text-slate-400">
                 <th className="py-2.5 px-3">Run ID</th>
                 <th className="py-2.5 px-3">Scenario</th>
-                <th className="py-2.5 px-3">Agent</th>
+                <th className="py-2.5 px-3">Policy</th>
                 <th className="py-2.5 px-3">Verdict</th>
-                <th className="py-2.5 px-3">Faults (Enc/Rec)</th>
-                <th className="py-2.5 px-3">Tool Calls</th>
+                <th className="py-2.5 px-3">Faults recovered</th>
+                <th className="py-2.5 px-3">Tool calls</th>
                 <th className="py-2.5 px-3">Duration</th>
                 <th className="py-2.5 px-3 text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60 font-mono">
+            <tbody className="divide-y divide-slate-800/60">
               {runs && runs.length > 0 ? (
                 runs.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-800/30 transition">
-                    <td className="py-2.5 px-3 text-indigo-300 font-bold">{r.id}</td>
-                    <td className="py-2.5 px-3 text-slate-200">{r.scenario_id}</td>
-                    <td className="py-2.5 px-3 text-slate-300 capitalize">{r.agent_type}</td>
+                    <td className="py-2.5 px-3 text-indigo-300 font-medium">{formatRunId(r.id)}</td>
+                    <td className="py-2.5 px-3 text-slate-200">{getScenarioLabel(r.scenario_id)}</td>
+                    <td className="py-2.5 px-3 text-slate-300">{getPolicyLabel(r.agent_type)}</td>
                     <td className="py-2.5 px-3">{getVerdictBadge(r.grader_result.verdict)}</td>
                     <td className="py-2.5 px-3 text-slate-400">
-                      {r.grader_result.faults_encountered} / {r.grader_result.faults_recovered}
+                      {r.grader_result.faults_encountered > 0
+                        ? `${r.grader_result.faults_recovered} of ${r.grader_result.faults_encountered}`
+                        : '0 faults'}
                     </td>
                     <td className="py-2.5 px-3 text-slate-300">{r.grader_result.tool_calls}</td>
                     <td className="py-2.5 px-3 text-slate-400">{r.metrics.execution_time_ms} ms</td>
                     <td className="py-2.5 px-3 text-right">
                       <Link
                         to={`/trace?runId=${r.id}`}
-                        className="text-indigo-400 hover:text-indigo-300 hover:underline font-sans text-xs"
+                        className="text-indigo-400 hover:text-indigo-300 hover:underline text-xs font-medium"
                       >
-                        Inspect Trace
+                        Inspect trace
                       </Link>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8} className="py-6 text-center text-slate-500 font-sans">
+                  <td colSpan={8} className="py-6 text-center text-slate-500">
                     No runs recorded yet. Head over to the Run Lab to launch an experiment.
                   </td>
                 </tr>

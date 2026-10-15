@@ -4,11 +4,20 @@ import { useNavigate } from 'react-router-dom';
 import {
   createRun,
   fetchCassettes,
+  fetchHealth,
   fetchMatrixJob,
   fetchScenarios,
   startMatrixJob,
 } from '../api';
 import { PolicyConfig, ScenarioSpec } from '../types';
+import {
+  getEvidenceLabel,
+  getFaultLabel,
+  getForbiddenActionLabel,
+  getPolicyLabel,
+  getScenarioLabel,
+  getToolLabel,
+} from '../lib/labels';
 import {
   AlertCircle,
   AlertTriangle,
@@ -38,7 +47,7 @@ export const RunLab: React.FC = () => {
   const [faultIntensity, setFaultIntensity] = useState<number>(2);
   const [seed, setSeed] = useState<number>(42);
 
-  // Policy Config overrides for Robust agent
+  // Policy Config overrides for Resilient agent
   const [policyConfig, setPolicyConfig] = useState<PolicyConfig>({
     max_retries: 3,
     validate_schema: true,
@@ -51,7 +60,7 @@ export const RunLab: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Fetch scenarios & cassettes
+  // Fetch scenarios, cassettes, & health
   const { data: scenarios, isLoading: scenariosLoading } = useQuery({
     queryKey: ['scenarios'],
     queryFn: fetchScenarios,
@@ -60,6 +69,11 @@ export const RunLab: React.FC = () => {
   const { data: cassettes } = useQuery({
     queryKey: ['cassettes'],
     queryFn: fetchCassettes,
+  });
+
+  const { data: health } = useQuery({
+    queryKey: ['health'],
+    queryFn: fetchHealth,
   });
 
   // Matrix status query
@@ -79,7 +93,7 @@ export const RunLab: React.FC = () => {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
-      setStatusMessage(`Run ${data.id} completed with verdict: ${data.grader_result.verdict}`);
+      setStatusMessage(`Run completed with verdict: ${data.grader_result.verdict}`);
       setErrorMessage(null);
       // Navigate to trace view
       navigate(`/trace?runId=${data.id}`);
@@ -95,11 +109,12 @@ export const RunLab: React.FC = () => {
     mutationFn: startMatrixJob,
     onSuccess: (data) => {
       setActiveMatrixJobId(data.job_id);
-      setStatusMessage(`Matrix job ${data.job_id} scheduled across all scenarios and policies.`);
+      setStatusMessage(`Matrix job scheduled across all scenarios and policies.`);
       setErrorMessage(null);
     },
     onError: (err: any) => {
-      setErrorMessage(err.message || 'Matrix job scheduling failed');
+      setErrorMessage(err.message || 'Matrix job failed to start');
+      setStatusMessage(null);
     },
   });
 
@@ -119,7 +134,7 @@ export const RunLab: React.FC = () => {
   };
 
   const handleRunFaulted = () => {
-    setStatusMessage(`Executing faulted run (${faultType}, intensity ${faultIntensity})...`);
+    setStatusMessage(`Executing faulted run (${getFaultLabel(faultType)}, intensity ${faultIntensity})...`);
     setErrorMessage(null);
     runMutation.mutate({
       scenario_id: scenarioId,
@@ -136,8 +151,8 @@ export const RunLab: React.FC = () => {
     setErrorMessage(null);
     matrixMutation.mutate({
       scenarios: ['healthy_service', 'bad_deploy', 'rollback_denied', 'unfixable_rollback', 'injected_instruction'],
-      agents: ['naive', 'robust'],
-      fault_types: ['none', 'timeout', 'http_500', 'malformed_json', 'transient_then_success'],
+      agents: ['naive', 'robust', 'llm'],
+      fault_types: ['none', 'timeout', 'http_500', 'malformed_json', 'empty_response', 'transient_then_success'],
       intensity: 2,
       seed,
       seed_count: matrixSeedCount,
@@ -150,7 +165,7 @@ export const RunLab: React.FC = () => {
     <div className="space-y-8">
       {/* Page Title */}
       <div className="border border-indigo-900/40 bg-gradient-to-r from-slate-900 via-indigo-950/20 to-slate-900 rounded-xl p-6 shadow-xl">
-        <div className="flex items-center gap-2 text-indigo-400 font-mono text-xs tracking-wider uppercase mb-1">
+        <div className="flex items-center gap-2 text-indigo-400 text-xs tracking-wider uppercase mb-1 font-semibold">
           <Sliders className="w-4 h-4" /> Experiment Workbench
         </div>
         <h1 className="text-2xl font-bold text-white tracking-tight">Run Lab & Fault Orchestrator</h1>
@@ -181,19 +196,19 @@ export const RunLab: React.FC = () => {
             <Layers className="w-5 h-5 text-indigo-400 animate-pulse" />
             <div>
               <div className="font-semibold text-slate-200">
-                Matrix Job: <span className="font-mono text-indigo-400">{matrixStatus.job_id}</span> ({matrixStatus.status.toUpperCase()})
+                Evaluation Matrix: <span className="text-indigo-400">{matrixStatus.status.toUpperCase()}</span>
               </div>
-              <div className="text-slate-400">
-                Executed {matrixStatus.completed_runs} / {matrixStatus.total_runs} combinations across scenarios & policies.
+              <div className="text-slate-400 mt-0.5">
+                Executed {matrixStatus.completed_runs} of {matrixStatus.total_runs} combinations across scenarios and policies.
               </div>
             </div>
           </div>
           {matrixStatus.status === 'completed' && (
             <button
               onClick={() => navigate('/')}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium"
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold"
             >
-              View Updated Matrix Heatmap
+              View Updated Reliability Matrix
             </button>
           )}
         </div>
@@ -220,13 +235,12 @@ export const RunLab: React.FC = () => {
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-xs text-white">{s.title}</span>
-                  <span className="text-[10px] font-mono text-indigo-400">{s.scenario_id}</span>
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">{s.description}</p>
+                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">{s.description}</p>
                 <div className="flex flex-wrap gap-1 mt-2">
                   {s.forbidden_actions.map((f) => (
-                    <span key={f} className="text-[9px] px-1.5 py-0.5 rounded bg-rose-950/70 border border-rose-800 text-rose-300">
-                      Forbidden: {f}
+                    <span key={f} className="text-[10px] px-2 py-0.5 rounded bg-rose-950/70 border border-rose-800 text-rose-300">
+                      {getForbiddenActionLabel(f)}
                     </span>
                   ))}
                 </div>
@@ -235,12 +249,12 @@ export const RunLab: React.FC = () => {
           </div>
 
           {currentScenario && (
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/80 text-[11px] space-y-1">
-              <div className="text-slate-400 font-semibold uppercase text-[10px]">Expected Evidence:</div>
+            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800/80 text-xs space-y-1.5">
+              <div className="text-slate-400 font-semibold uppercase text-[10px] tracking-wider">Expected Verification:</div>
               <div className="flex flex-wrap gap-1">
                 {currentScenario.expected_evidence.map((ev) => (
-                  <span key={ev} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px]">
-                    {ev}
+                  <span key={ev} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">
+                    {getEvidenceLabel(ev)}
                   </span>
                 ))}
               </div>
@@ -248,104 +262,168 @@ export const RunLab: React.FC = () => {
           )}
         </div>
 
-        {/* Agent & Policy Selection (1 col) */}
+        {/* Agent Selection & Policy Customization (1 col) */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Bot className="w-4 h-4 text-indigo-400" /> 2. Agent Policy & Guardrails
-            </h2>
-          </div>
-
-          <div className="p-2.5 rounded bg-amber-950/20 border border-amber-900/40 text-[11px] text-amber-300/90">
-            <strong>Agent Mode Note:</strong> Naive and Robust agents are <em>deterministic simulated agents</em> running with fixed policy guardrails.
-          </div>
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Bot className="w-4 h-4 text-indigo-400" /> 2. Agent Policy Under Test
+          </h2>
 
           <div className="space-y-2">
-            {[
-              { id: 'naive', title: 'Naive Agent', desc: 'No retries, trusts tool outputs, vulnerable to injections & malformed schemas.' },
-              { id: 'robust', title: 'Robust Agent', desc: 'Configurable policy with retry budget, schema validation, and recovery verification.' },
-              { id: 'llm-replay', title: 'LLM Replay (Cassette)', desc: 'Replays offline hand-authored / recorded execution trajectories without live model.' },
-              { id: 'llm-live', title: 'LLM Live (Ollama / OpenAI)', desc: 'Queries live OpenAI-compatible endpoint. Requires running server or profile llm.' },
-            ].map((ag) => (
+            {/* Basic agent */}
+            <div
+              onClick={() => setAgentType('naive')}
+              className={`p-3 rounded-lg border text-left cursor-pointer transition ${
+                agentType === 'naive'
+                  ? 'border-amber-600 bg-amber-950/20'
+                  : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-xs text-amber-300">{getPolicyLabel('naive')}</span>
+                <span className="text-[10px] text-slate-400">Reference policy</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                Single-try deterministic policy. Lacks schema validation and retries; vulnerable to transient errors.
+              </p>
+            </div>
+
+            {/* Resilient agent */}
+            <div
+              onClick={() => setAgentType('robust')}
+              className={`p-3 rounded-lg border text-left cursor-pointer transition ${
+                agentType === 'robust'
+                  ? 'border-indigo-600 bg-indigo-950/20'
+                  : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-xs text-indigo-300">{getPolicyLabel('robust')}</span>
+                <span className="text-[10px] text-slate-400">Hardened policy</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                Multi-try policy with schema validation, instruction isolation, and postcondition verification.
+              </p>
+            </div>
+
+            {/* Language model (recorded) */}
+            <div
+              onClick={() => setAgentType('llm-replay')}
+              className={`p-3 rounded-lg border text-left cursor-pointer transition ${
+                agentType === 'llm-replay' || agentType === 'llm'
+                  ? 'border-purple-600 bg-purple-950/20'
+                  : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-xs text-purple-300">{getPolicyLabel('llm')}</span>
+                <span className="text-[10px] text-slate-400">Recorded session</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                Deterministic replay of recorded language model sessions across incident scenarios.
+              </p>
+            </div>
+
+            {/* Language model (live) - if enabled */}
+            {health?.llm_mode === 'live' && (
               <div
-                key={ag.id}
-                onClick={() => setAgentType(ag.id)}
-                className={`p-3 rounded-lg border cursor-pointer transition ${
-                  agentType === ag.id
-                    ? 'border-indigo-600 bg-indigo-950/30'
+                onClick={() => setAgentType('llm-live')}
+                className={`p-3 rounded-lg border text-left cursor-pointer transition ${
+                  agentType === 'llm-live'
+                    ? 'border-emerald-600 bg-emerald-950/20'
                     : 'border-slate-800 bg-slate-800/40 hover:border-slate-700'
                 }`}
               >
-                <div className="font-semibold text-xs text-white">{ag.title}</div>
-                <div className="text-[11px] text-slate-400 mt-0.5">{ag.desc}</div>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs text-emerald-300">Language model (live)</span>
+                  <span className="text-[10px] text-slate-400">Live API</span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  Real-time tool-calling language model against the simulated operations environment.
+                </p>
               </div>
-            ))}
+            )}
           </div>
 
-          {/* Policy Config Checkboxes for Robust */}
+          {/* Policy Config Options for Resilient Agent */}
           {agentType === 'robust' && (
-            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800 space-y-2.5">
-              <div className="text-xs font-semibold text-slate-300">PolicyConfig Parameters</div>
+            <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800 space-y-2 text-xs">
+              <div className="font-semibold text-slate-300 mb-2">Policy Configuration:</div>
 
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-400">Max Retries Budget:</span>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Max Retries on Transient Error:</span>
                 <input
                   type="number"
                   min={0}
                   max={5}
                   value={policyConfig.max_retries}
-                  onChange={(e) => setPolicyConfig({ ...policyConfig, max_retries: parseInt(e.target.value) || 0 })}
-                  className="w-16 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-center text-white text-xs font-mono"
+                  onChange={(e) =>
+                    setPolicyConfig({ ...policyConfig, max_retries: parseInt(e.target.value) || 0 })
+                  }
+                  className="w-14 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-white text-center"
                 />
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={policyConfig.validate_schema}
                   onChange={(e) => setPolicyConfig({ ...policyConfig, validate_schema: e.target.checked })}
                   className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
                 />
-                <span>Validate JSON Schema (catch malformed payloads)</span>
+                <span>Validate data schemas (catch malformed payloads)</span>
               </label>
 
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={policyConfig.treat_output_as_data}
                   onChange={(e) => setPolicyConfig({ ...policyConfig, treat_output_as_data: e.target.checked })}
                   className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
                 />
-                <span>Treat Output as Data (isolate prompt injections)</span>
+                <span>Treat output as data (isolate prompt instructions)</span>
               </label>
 
-              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+              <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={policyConfig.verify_postconditions}
                   onChange={(e) => setPolicyConfig({ ...policyConfig, verify_postconditions: e.target.checked })}
                   className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
                 />
-                <span>Verify Postconditions (enforce verify_recovery)</span>
+                <span>Verify postconditions (enforce recovery postcondition)</span>
               </label>
             </div>
           )}
 
-          {/* Cassette detail if LLM Replay */}
-          {agentType === 'llm-replay' && (
+          {/* Recorded Sessions Panel if LLM Replay */}
+          {(agentType === 'llm-replay' || agentType === 'llm') && (
             <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800 space-y-2 text-xs">
-              <div className="font-semibold text-slate-300">Available Replay Cassettes:</div>
-              {cassettes?.map((c) => (
-                <div key={c.cassette_id} className="p-2 rounded bg-slate-900 border border-slate-800 text-[11px]">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-indigo-400">{c.cassette_id}</span>
-                    <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[9px] uppercase text-amber-400 font-bold">
-                      {c.provenance}
-                    </span>
+              <div className="font-semibold text-slate-300">Recorded sessions:</div>
+              {cassettes?.map((c) => {
+                const isLiveModel = c.provenance?.toLowerCase().includes('live') || c.model?.toLowerCase().includes('gemini');
+                const badgeLabel = isLiveModel ? 'Recorded from a live model' : 'Scripted example';
+                return (
+                  <div key={c.cassette_id} className="p-2.5 rounded bg-slate-900 border border-slate-800 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-200">
+                        {getScenarioLabel(c.scenario_id)}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-slate-800 text-[10px] text-amber-300 font-medium border border-slate-700">
+                        {badgeLabel}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">{c.description}</p>
+                    <details data-technical-details="true" className="text-[10px] text-slate-500 pt-1">
+                      <summary className="cursor-pointer hover:text-slate-300">Technical details</summary>
+                      <div className="p-2 mt-1 rounded bg-slate-950 border border-slate-800 text-slate-400 space-y-0.5 font-mono">
+                        <div>Session ID: {c.cassette_id}</div>
+                        <div>Model: {c.model}</div>
+                        <div>Scenario ID: {c.scenario_id}</div>
+                      </div>
+                    </details>
                   </div>
-                  <div className="text-slate-400 mt-1">{c.description}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -363,32 +441,34 @@ export const RunLab: React.FC = () => {
               <select
                 value={faultType}
                 onChange={(e) => setFaultType(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs font-mono"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
               >
-                <option value="none">None (Clean Run)</option>
-                <option value="timeout">Timeout (HTTP 408 / 5000ms)</option>
-                <option value="http_500">HTTP 500 (Internal Error)</option>
-                <option value="malformed_json">Malformed JSON (Corrupted string)</option>
-                <option value="empty_response">Empty Response (&quot;&quot;)</option>
-                <option value="transient_then_success">Transient Then Success (fails 2x then OK)</option>
+                <option value="none">{getFaultLabel('none')}</option>
+                <option value="timeout">{getFaultLabel('timeout')}</option>
+                <option value="http_500">{getFaultLabel('http_500')}</option>
+                <option value="malformed_json">{getFaultLabel('malformed_json')}</option>
+                <option value="empty_response">{getFaultLabel('empty_response')}</option>
+                <option value="transient_then_success">{getFaultLabel('transient_then_success')}</option>
               </select>
             </div>
 
             {/* Intensity */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Fault Intensity (Count of Faults):</span>
-                <span className="font-mono font-bold text-white">{faultIntensity}</span>
+            {faultType !== 'none' && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Fault Intensity (Count of Faults):</span>
+                  <span className="font-bold text-white">{faultIntensity}</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={faultIntensity}
+                  onChange={(e) => setFaultIntensity(parseInt(e.target.value))}
+                  className="w-full accent-indigo-600"
+                />
               </div>
-              <input
-                type="range"
-                min={1}
-                max={5}
-                value={faultIntensity}
-                onChange={(e) => setFaultIntensity(parseInt(e.target.value))}
-                className="w-full accent-indigo-600"
-              />
-            </div>
+            )}
 
             {/* Seed */}
             <div className="space-y-1">
@@ -397,9 +477,9 @@ export const RunLab: React.FC = () => {
                 type="number"
                 value={seed}
                 onChange={(e) => setSeed(parseInt(e.target.value) || 0)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs font-mono"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
               />
-              <p className="text-[10px] text-slate-500">Same seed + config yields identical execution trace.</p>
+              <p className="text-[10px] text-slate-500">Same seed and configuration yields identical execution trace.</p>
             </div>
           </div>
 
@@ -426,7 +506,7 @@ export const RunLab: React.FC = () => {
               disabled={isRunning}
               className="w-full py-2.5 px-4 bg-purple-900/60 hover:bg-purple-800/80 border border-purple-700/60 disabled:opacity-50 text-purple-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition"
             >
-              <Layers className="w-4 h-4 text-purple-400" /> Run Full Matrix (Async Job)
+              <Layers className="w-4 h-4 text-purple-400" /> Run Full Matrix
             </button>
           </div>
         </div>

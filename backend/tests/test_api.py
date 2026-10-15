@@ -198,3 +198,79 @@ def test_api_clear_history_requires_confirm():
     # Confirm history is empty
     runs_res = client.get("/api/runs")
     assert len(runs_res.json()) == 0
+
+
+def test_api_metrics_and_report_data_consistency():
+    """
+    Asserts exact mathematical consistency across /api/metrics, /api/export/runs.json,
+    and /api/export/report.md.
+    """
+    # Create several varied runs
+    for scen in ["healthy_service", "bad_deploy"]:
+        for ag in ["naive", "robust"]:
+            client.post("/api/runs", json={
+                "scenario_id": scen,
+                "agent_type": ag,
+                "fault_type": "timeout" if scen == "bad_deploy" else None,
+                "fault_intensity": 1 if scen == "bad_deploy" else 0,
+                "seed": 42,
+            })
+
+    metrics_res = client.get("/api/metrics").json()
+    export_json = client.get("/api/export/runs.json").json()
+    report_md = client.get("/api/export/report.md").text
+
+    m_aggs = metrics_res["aggregates"]
+    j_aggs = export_json["aggregates"]
+
+    # 1. Total runs must match exactly
+    assert m_aggs["total_runs"] == j_aggs["total_runs"]
+    assert f"n = {m_aggs['total_runs']}" in report_md
+
+    # 2. Success counts and formatted strings must match exactly
+    assert m_aggs["success_count"] == j_aggs["success_count"]
+    assert m_aggs["success_formatted"] == j_aggs["success_formatted"]
+    assert m_aggs["success_formatted"] in report_md
+
+    # 3. Baseline vs Faulted numbers match heatmap exactly
+    b_vs_f = metrics_res["baseline_vs_faulted"]
+    matrix = metrics_res["reliability_matrix"]
+    if matrix.get("naive", {}).get("none") is not None:
+        assert b_vs_f["by_agent"]["naive"]["baseline"]["rate"] == matrix["naive"]["none"]
+    if matrix.get("robust", {}).get("none") is not None:
+        assert b_vs_f["by_agent"]["robust"]["baseline"]["rate"] == matrix["robust"]["none"]
+
+
+def test_diagnosis_grouped_citations_match_trace():
+    """
+    Verifies that for both failed and passed runs, every cited event ID exists
+    in the trace, and grouped fault summaries' counts match the trace.
+    """
+    import re
+    # Run with transient fault (recovers with robust)
+    res_rec = client.post("/api/runs", json={
+        "scenario_id": "healthy_service",
+        "agent_type": "robust",
+        "fault_type": "transient_then_success",
+        "fault_intensity": 2,
+        "seed": 42,
+    }).json()
+    diag_rec = client.post(f"/api/diagnose/{res_rec['id']}").json()
+
+    trace_ids = {e["event_id"] for e in res_rec["trace"]}
+    all_cited = set(re.findall(r"\bE\d{2}\b", " ".join(diag_rec["observed_facts"]) + " " + diag_rec["inferred_explanation"]))
+    assert all_cited.issubset(trace_ids)
+
+    # Run with unfixable failure
+    res_fail = client.post("/api/runs", json={
+        "scenario_id": "unfixable_rollback",
+        "agent_type": "naive",
+        "fault_type": "http_500",
+        "fault_intensity": 1,
+        "seed": 42,
+    }).json()
+    diag_fail = client.post(f"/api/diagnose/{res_fail['id']}").json()
+
+    fail_trace_ids = {e["event_id"] for e in res_fail["trace"]}
+    fail_cited = set(re.findall(r"\bE\d{2}\b", " ".join(diag_fail["observed_facts"]) + " " + diag_fail["inferred_explanation"]))
+    assert fail_cited.issubset(fail_trace_ids)

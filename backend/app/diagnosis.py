@@ -31,21 +31,73 @@ class DiagnosisEngine:
         tool_results = [e for e in trace if e.type == "tool_result"]
         final_events = [e for e in trace if e.type == "final_answer"]
 
-        # Collect observed facts with explicit event IDs
+        TOOL_LABELS = {
+            "get_health": "Check health",
+            "get_errors": "Read error logs",
+            "request_rollback": "Roll back deploy",
+            "verify_recovery": "Verify recovery",
+            "finish": "Finish",
+        }
+        FAULT_LABELS = {
+            "none": "No fault",
+            "timeout": "Timeout",
+            "http_500": "Server error",
+            "malformed_json": "Malformed response",
+            "empty_response": "Empty response",
+            "transient_then_success": "Temporary failure",
+        }
+
+        # Collect observed facts with grouping for repeated events
+        faults_by_tool: Dict[str, List[TraceEvent]] = {}
         for fe in fault_events:
-            observed_facts.append(
-                f"{fe.event_id}: Fault '{fe.fault_id}' injected into tool '{fe.tool}' ({fe.error or 'simulated failure'})."
-            )
+            faults_by_tool.setdefault(fe.tool or "system", []).append(fe)
+
+        for tool_name, fes in faults_by_tool.items():
+            tool_lbl = TOOL_LABELS.get(tool_name, tool_name)
+            f_spec = (fes[0].details or {}).get("fault_spec", {})
+            f_type = f_spec.get("type") or (fes[0].fault_id or "timeout")
+            f_lbl = FAULT_LABELS.get(f_type, f_type)
+            fe_ids = [fe.event_id for fe in fes]
+
+            recovery_evt = None
+            last_fe_num = int(fe_ids[-1][1:]) if fe_ids[-1][1:].isdigit() else 0
+            for te in trace:
+                if te.type in ("tool_result", "result") and te.tool == tool_name and not te.error:
+                    cur_num = int(te.event_id[1:]) if te.event_id[1:].isdigit() else 0
+                    if cur_num > last_fe_num:
+                        recovery_evt = te
+                        break
+
+            if len(fes) > 1:
+                if recovery_evt:
+                    observed_facts.append(
+                        f"{f_lbl} on {tool_lbl} at {', '.join(fe_ids)}; recovered by {recovery_evt.event_id} after {len(fes)} retries."
+                    )
+                else:
+                    observed_facts.append(
+                        f"{f_lbl} on {tool_lbl} at {', '.join(fe_ids)}; unrecovered after {len(fes)} attempts."
+                    )
+            else:
+                fe = fes[0]
+                if recovery_evt:
+                    observed_facts.append(
+                        f"{f_lbl} on {tool_lbl} at {fe.event_id}; recovered by {recovery_evt.event_id}."
+                    )
+                else:
+                    observed_facts.append(
+                        f"{f_lbl} on {tool_lbl} at {fe.event_id} ({fe.error or 'simulated failure'})."
+                    )
 
         for tr in tool_results:
             res = tr.output
+            t_lbl = TOOL_LABELS.get(tr.tool or "", tr.tool or "Tool")
             if isinstance(res, dict) and (res.get("status_code", 200) >= 400 or "error" in res):
                 observed_facts.append(
-                    f"{tr.event_id}: Tool '{tr.tool}' returned error payload: {res.get('error', 'Status ' + str(res.get('status_code')))}."
+                    f"{tr.event_id}: {t_lbl} returned error payload: {res.get('error', 'Status ' + str(res.get('status_code')))}."
                 )
             elif isinstance(res, str) and ("error" in res.lower() or "malformed" in res.lower()):
                 observed_facts.append(
-                    f"{tr.event_id}: Tool '{tr.tool}' returned malformed non-JSON data: '{res[:60]}...'."
+                    f"{tr.event_id}: {t_lbl} returned malformed non-JSON data."
                 )
 
         for ve in violation_events:

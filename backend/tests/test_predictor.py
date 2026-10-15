@@ -14,6 +14,7 @@ from app.predictor import FailureRiskPredictor, get_leakage_safe_split
 from app.schemas import (
     GraderResult,
     PolicyConfig,
+    PredictorPredictRequest,
     RunMetrics,
     RunResponse,
 )
@@ -111,3 +112,39 @@ def test_generate_simulator_runs_endpoint():
     assert data["status"] == "ok"
     assert data["generated_count"] == 6
     assert data["total_runs_in_db"] >= 6
+
+
+def test_predictor_predictions_differ_across_fault_types():
+    predictor = FailureRiskPredictor()
+    weak_policy = PolicyConfig(max_retries=0, validate_schema=False, treat_output_as_data=False, verify_postconditions=False)
+    
+    res_none = predictor.predict(PredictorPredictRequest(
+        scenario_id="healthy_service", policy=weak_policy, fault_type="none", fault_intensity=0
+    ))
+    res_timeout = predictor.predict(PredictorPredictRequest(
+        scenario_id="healthy_service", policy=weak_policy, fault_type="timeout", fault_intensity=2
+    ))
+
+    assert res_none.per_fault_risks is not None
+    assert len(res_none.per_fault_risks) == 6
+    assert "timeout" in res_none.per_fault_risks
+    assert "empty_response" in res_none.per_fault_risks
+    assert res_none.simulated_check_total == 10
+    assert 0.0 <= res_none.simulated_check_rate <= 1.0
+
+
+def test_toggling_guardrails_changes_result_consistently():
+    predictor = FailureRiskPredictor()
+    weak_policy = PolicyConfig(max_retries=0, validate_schema=False, treat_output_as_data=False, verify_postconditions=False)
+    hardened_policy = PolicyConfig(max_retries=3, validate_schema=True, treat_output_as_data=True, verify_postconditions=True)
+
+    weak_pred = predictor.predict(PredictorPredictRequest(
+        scenario_id="bad_deploy", policy=weak_policy, fault_type="timeout", fault_intensity=1
+    ))
+    hard_pred = predictor.predict(PredictorPredictRequest(
+        scenario_id="bad_deploy", policy=hardened_policy, fault_type="timeout", fault_intensity=1
+    ))
+
+    # Toggling guardrails on should reduce failure risk
+    assert hard_pred.failure_risk_probability < weak_pred.failure_risk_probability
+    assert hard_pred.simulated_check_rate <= weak_pred.simulated_check_rate

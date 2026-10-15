@@ -84,6 +84,9 @@ export interface CassetteMetadata {
   description: string;
   scenario_id: string;
   model: string;
+  recorded_at?: string;
+  environment?: string;
+  seed?: number;
 }
 
 export interface MatrixCellStats {
@@ -173,6 +176,10 @@ export interface PredictorTrainResponse {
   baseline_comparison?: string;
   split_strategy?: string;
   real_runs_only?: boolean;
+  unique_configurations_count?: number;
+  leave_one_scenario_out_accuracy?: number;
+  leave_one_fault_out_accuracy?: number;
+  estimator_note?: string;
 }
 
 export interface PredictorPredictResponse {
@@ -180,6 +187,18 @@ export interface PredictorPredictResponse {
   risk_level: 'LOW' | 'MEDIUM' | 'HIGH';
   contributing_factors: string[];
   warning: string;
+  model_estimate_probability?: number;
+  model_risk_level?: 'LOW' | 'MEDIUM' | 'HIGH';
+  simulated_check_failures?: number;
+  simulated_check_total?: number;
+  simulated_check_rate?: number;
+  simulated_check_formatted?: string;
+  disagreement?: boolean;
+  unique_configurations_count?: number;
+  leave_one_scenario_out_accuracy?: number;
+  majority_class_baseline?: number;
+  note?: string;
+  per_fault_risks?: Record<string, number>;
 }
 
 export interface MatrixJobStatusResponse {
@@ -193,3 +212,4 @@ export interface MatrixJobStatusResponse {
   heatmap_details?: Record<string, Record<string, MatrixCellStats>>;
   summary?: AggregateMetrics;
 }
+

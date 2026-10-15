@@ -290,3 +290,154 @@ class DeterministicGrader:
             policy_violation_ci_95=viol_ci,
             is_low_sample=(total < 10),
         )
+
+    @staticmethod
+    def normalize_agent_name(ag: Optional[str]) -> str:
+        if not ag:
+            return "naive"
+        ag_clean = ag.strip().lower()
+        if ag_clean in ("llm", "llm-replay", "llm-live", "llm-recorded", "llm (recorded)", "language model (recorded)", "language model (live)"):
+            return "llm"
+        if ag_clean in ("robust", "resilient agent"):
+            return "robust"
+        if ag_clean in ("naive", "basic agent"):
+            return "naive"
+        return ag_clean
+
+    @classmethod
+    def compute_dataset_analysis(cls, runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Unified aggregation engine:
+        Produces identical metrics, reliability matrix with Wilson 95% CIs, and
+        per-agent baseline vs faulted breakdown used consistently across /metrics,
+        the markdown report, and JSON export.
+        """
+        from app.stats import format_rate_with_n, wilson_score_interval
+        aggs = cls.compute_aggregates(runs)
+
+        fault_types = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
+        agents = ["naive", "robust", "llm"]
+
+        counts: Dict[str, Dict[str, Dict[str, int]]] = {
+            ag: {ft: {"passed": 0, "total": 0} for ft in fault_types}
+            for ag in agents
+        }
+
+        agent_split: Dict[str, Dict[str, Dict[str, int]]] = {
+            ag: {
+                "baseline": {"passed": 0, "total": 0},
+                "faulted": {"passed": 0, "total": 0},
+            }
+            for ag in agents
+        }
+
+        for r in runs:
+            raw_ag = r.get("agent_type", "")
+            ag = cls.normalize_agent_name(raw_ag)
+            if ag not in counts:
+                counts[ag] = {ft: {"passed": 0, "total": 0} for ft in fault_types}
+                agent_split[ag] = {
+                    "baseline": {"passed": 0, "total": 0},
+                    "faulted": {"passed": 0, "total": 0},
+                }
+
+            schedule = r.get("fault_schedule") or []
+            ft = schedule[0].get("type") if (schedule and isinstance(schedule[0], dict)) else "none"
+            if ft not in counts[ag]:
+                counts[ag][ft] = {"passed": 0, "total": 0}
+
+            counts[ag][ft]["total"] += 1
+            grader = r.get("grader_result") or {}
+            is_passed = (grader.get("verdict") == "PASSED")
+            if is_passed:
+                counts[ag][ft]["passed"] += 1
+
+            if not schedule or ft == "none":
+                agent_split[ag]["baseline"]["total"] += 1
+                if is_passed:
+                    agent_split[ag]["baseline"]["passed"] += 1
+            else:
+                agent_split[ag]["faulted"]["total"] += 1
+                if is_passed:
+                    agent_split[ag]["faulted"]["passed"] += 1
+
+        formatted_matrix: Dict[str, Dict[str, Optional[float]]] = {}
+        matrix_details: Dict[str, Dict[str, Any]] = {}
+
+        for ag in agents:
+            formatted_matrix[ag] = {}
+            matrix_details[ag] = {}
+            for ft in fault_types:
+                c = counts.get(ag, {}).get(ft, {"passed": 0, "total": 0})
+                p = c["passed"]
+                t = c["total"]
+                rate = round(p / t, 4) if t > 0 else None
+                low, high = wilson_score_interval(p, t)
+                formatted_matrix[ag][ft] = rate
+                matrix_details[ag][ft] = {
+                    "passed": p,
+                    "total": t,
+                    "rate": rate,
+                    "formatted": format_rate_with_n(p, t) if t > 0 else "N/A",
+                    "ci_lower": low,
+                    "ci_upper": high,
+                    "ci_95": [low, high] if low is not None else None,
+                    "is_low_sample": (t < 10),
+                    "no_runs_yet": (t == 0),
+                }
+
+        b_p = sum(agent_split[ag]["baseline"]["passed"] for ag in agents)
+        b_t = sum(agent_split[ag]["baseline"]["total"] for ag in agents)
+        f_p = sum(agent_split[ag]["faulted"]["passed"] for ag in agents)
+        f_t = sum(agent_split[ag]["faulted"]["total"] for ag in agents)
+        b_rate = round(b_p / b_t, 4) if b_t > 0 else None
+        f_rate = round(f_p / f_t, 4) if f_t > 0 else None
+
+        baseline_vs_faulted: Dict[str, Any] = {
+            "overall": {
+                "baseline": {
+                    "passed": b_p,
+                    "total": b_t,
+                    "rate": b_rate,
+                    "formatted": format_rate_with_n(b_p, b_t) if b_t > 0 else "N/A",
+                },
+                "faulted": {
+                    "passed": f_p,
+                    "total": f_t,
+                    "rate": f_rate,
+                    "formatted": format_rate_with_n(f_p, f_t) if f_t > 0 else "N/A",
+                },
+                "degradation": round(b_rate - f_rate, 4) if (b_rate is not None and f_rate is not None) else None,
+            },
+            "by_agent": {},
+        }
+
+        for ag in agents:
+            ab_p = agent_split[ag]["baseline"]["passed"]
+            ab_t = agent_split[ag]["baseline"]["total"]
+            af_p = agent_split[ag]["faulted"]["passed"]
+            af_t = agent_split[ag]["faulted"]["total"]
+            ab_rate = round(ab_p / ab_t, 4) if ab_t > 0 else None
+            af_rate = round(af_p / af_t, 4) if af_t > 0 else None
+            baseline_vs_faulted["by_agent"][ag] = {
+                "baseline": {
+                    "passed": ab_p,
+                    "total": ab_t,
+                    "rate": ab_rate,
+                    "formatted": format_rate_with_n(ab_p, ab_t) if ab_t > 0 else "N/A",
+                },
+                "faulted": {
+                    "passed": af_p,
+                    "total": af_t,
+                    "rate": af_rate,
+                    "formatted": format_rate_with_n(af_p, af_t) if af_t > 0 else "N/A",
+                },
+                "degradation": round(ab_rate - af_rate, 4) if (ab_rate is not None and af_rate is not None) else None,
+            }
+
+        return {
+            "aggregates": aggs.model_dump(),
+            "matrix": formatted_matrix,
+            "matrix_details": matrix_details,
+            "baseline_vs_faulted": baseline_vs_faulted,
+        }

@@ -129,6 +129,12 @@ class DatabaseManager:
             records = session.exec(query).all()
             return [self._record_to_response(r) for r in records]
 
+    def list_all_runs(self) -> List[RunResponse]:
+        with self.get_session() as session:
+            query = select(RunRecord).order_by(RunRecord.created_at.desc())
+            records = session.exec(query).all()
+            return [self._record_to_response(r) for r in records]
+
     def clear_runs(self):
         with self.get_session() as session:
             for record in session.exec(select(RunRecord)).all():
