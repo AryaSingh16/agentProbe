@@ -1,6 +1,6 @@
 """
 AgentProbe Report and Export Generator:
-- Generates sanitized fine-tuning datasets from successful RobustAgent runs (secrets stripped, prompt injections excluded).
+- Generates export datasets for optional LoRA workflow, not executed (secrets stripped, prompt injections excluded).
 - Produces comprehensive Markdown stress-test reports with tables, metrics, and citations.
 - Outputs structured JSON archives.
 """
@@ -26,7 +26,7 @@ def sanitize_text(text: str) -> str:
 
 def generate_finetune_jsonl(runs: List[RunResponse]) -> str:
     """
-    Generates chat-format fine-tuning examples from SUCCESSFUL graded RobustAgent runs only.
+    Generates chat-format export examples for optional LoRA workflow, not executed.
     Strictly filters out prompt injection scenarios and strips all secrets.
     """
     lines: List[str] = []
@@ -36,7 +36,7 @@ def generate_finetune_jsonl(runs: List[RunResponse]) -> str:
         if run.grader_result.verdict != "PASSED" or run.agent_type != "robust":
             continue
 
-        # Exclude prompt injection scenarios from fine-tuning corpus to prevent training on adversarial text
+        # Exclude prompt injection scenarios from export corpus to prevent training on adversarial text
         if run.scenario_id == "injected_instruction":
             continue
 
@@ -191,7 +191,7 @@ def generate_markdown_report(runs: List[RunResponse]) -> str:
     md.append("## 5. Security & Boundary Guarantees")
     md.append("")
     md.append("- All operational tooling is executed in-memory with strict schema allowlists.")
-    md.append("- Fine-tuning datasets strip all authorization secrets and omit prompt injections.")
+    md.append("- Export datasets strip all authorization secrets and omit prompt injections (optional LoRA workflow, not executed).")
     md.append("- No external paid APIs or credentials required.")
     md.append("")
 

@@ -45,7 +45,7 @@ class NaiveAgent(BaseAgent):
     Naive agent:
     - Retries: 0 (aborts on first tool error)
     - Schema validation: None (crashes on malformed/empty responses)
-    - Safety: Trusts all output (executes prompt injection inside tool logs)
+    - Policy isolation: Trusts all output (executes prompt injection inside tool logs)
     - Postconditions: Does not verify recovery after mutating actions
     """
     def decide_next_action(
@@ -150,8 +150,8 @@ class RobustAgent(BaseAgent):
     """
     Robust agent configurable via PolicyConfig:
     - Retries: configurable retry budget with tracking
-    - Schema validation: safe parsing, detects malformed/empty response
-    - Safety: treats all tool output as data, resists prompt injection
+    - Schema validation: defensive parsing, detects malformed/empty response
+    - Policy isolation: treats all tool output as data, resists prompt injection
     - Postconditions: enforces verify_recovery before terminating
     """
     def decide_next_action(
@@ -190,7 +190,7 @@ class RobustAgent(BaseAgent):
             else:
                 # If not validating schema, malformed JSON throws unhandled exception
                 if isinstance(last_res, str) and ("malformed" in last_res or "unexpected_token" in last_res):
-                    raise ValueError(f"RobustAgent (unvalidated schema): Crashed on malformed JSON from {last_tool}")
+                    raise ValueError(f"RobustAgent (unverified schema): Crashed on malformed JSON from {last_tool}")
                 if isinstance(last_res, dict) and (last_res.get("status_code", 200) >= 400 or "error" in last_res):
                     is_error = True
                     error_reason = str(last_res.get("error", "HTTP error"))
@@ -209,7 +209,7 @@ class RobustAgent(BaseAgent):
                     # Retry budget exhausted
                     return AgentAction(
                         tool="finish",
-                        thought=f"Tool {last_tool} exhausted retry budget ({self.policy.max_retries} attempts). Failing safely.",
+                        thought=f"Tool {last_tool} exhausted retry budget ({self.policy.max_retries} attempts). Graceful fallback termination.",
                         is_finish=True,
                         finish_reason=f"EXHAUSTED_RETRIES: {last_tool} failed after {retries} retries",
                     )

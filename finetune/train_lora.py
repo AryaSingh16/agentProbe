@@ -1,7 +1,7 @@
 """
-AgentProbe Optional LoRA Fine-Tuning Script.
+AgentProbe Optional LoRA Script: optional LoRA workflow, not executed.
 NOTICE: This script requires an NVIDIA GPU and is NOT executed during standard docker compose runs.
-It demonstrates fine-tuning an open-source instruction model on sanitized AgentProbe traces.
+It demonstrates an optional LoRA workflow, not executed in standard AgentProbe runs.
 """
 import argparse
 import os

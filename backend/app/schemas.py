@@ -184,7 +184,7 @@ class PredictorTrainResponse(BaseModel):
     accuracy: float
     auc: Optional[float]
     sample_size: int
-    warning: str = "small-data, not validated for production use"
+    warning: str = "small-data, not evaluated for production use"
     feature_importances: Dict[str, float]
     # Additive fields for honesty & real data requirements
     status: str = "Insufficient data: metrics are not meaningful"
@@ -209,7 +209,7 @@ class PredictorPredictResponse(BaseModel):
     failure_risk_probability: float
     risk_level: str  # LOW, MEDIUM, HIGH
     contributing_factors: List[str]
-    warning: str = "small-data, not validated for production use"
+    warning: str = "small-data, not evaluated for production use"
 
 
 class MatrixCellStats(BaseModel):

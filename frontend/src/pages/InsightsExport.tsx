@@ -101,7 +101,7 @@ export const InsightsExport: React.FC = () => {
         </div>
         <h1 className="text-2xl font-bold text-white tracking-tight">Insights, Predictor & Data Pipelines</h1>
         <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-          Pre-deployment failure risk prediction, audited Markdown stress-test reports, and sanitized chat fine-tuning exports.
+          Pre-deployment failure risk prediction, audited Markdown stress-test reports, and exported datasets for optional LoRA workflow (not executed).
         </p>
       </div>
 
@@ -408,8 +408,8 @@ export const InsightsExport: React.FC = () => {
                 className="p-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-center transition flex flex-col items-center gap-2"
               >
                 <Database className="w-5 h-5 text-purple-400" />
-                <span className="text-xs font-semibold text-white">Fine-tune (JSONL)</span>
-                <span className="text-[10px] text-slate-400">Sanitized chat format</span>
+                <span className="text-xs font-semibold text-white">Export (JSONL)</span>
+                <span className="text-[10px] text-slate-400">Optional LoRA workflow (not executed)</span>
               </a>
             </div>
           </div>

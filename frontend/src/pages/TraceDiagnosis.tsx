@@ -466,7 +466,7 @@ export const TraceDiagnosis: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400">
-              Synthesizes a targeted PolicyConfig patch for failing faults and re-runs on identical conditions to prove the improvement.
+              Synthesizes a targeted PolicyConfig patch for failing faults and re-runs on identical conditions to measure the counterfactual outcome.
             </p>
 
             <button

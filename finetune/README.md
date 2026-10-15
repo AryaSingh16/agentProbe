@@ -1,6 +1,6 @@
-# AgentProbe Fine-Tuning Pipeline (LoRA)
+# AgentProbe Optional LoRA Pipeline (Not Executed)
 
-> **IMPORTANT NOTICE**: This fine-tuning script is optional and **NOT executed in Docker Compose** or the default demo. It requires an NVIDIA GPU (CUDA), PyTorch, Hugging Face `transformers`, `peft`, `trl`, and `bitsandbytes`. It has not been trained or evaluated in this environment. Do not claim that any model was fine-tuned as part of the default AgentProbe setup.
+> **IMPORTANT NOTICE**: optional LoRA workflow, not executed in Docker Compose or the default demo. It requires an NVIDIA GPU (CUDA), PyTorch, Hugging Face `transformers`, `peft`, `trl`, and `bitsandbytes`. It has not been trained or evaluated in this environment. No model was fine-tuned.
 
 ---
 
@@ -38,7 +38,7 @@ pip install torch transformers peft trl datasets bitsandbytes accelerate
 curl -o finetune.jsonl http://localhost:8000/api/export/finetune.jsonl
 ```
 
-3. Launch LoRA fine-tuning:
+3. Launch optional LoRA training (not executed in AgentProbe default):
 ```bash
 python finetune/train_lora.py --data_path finetune.jsonl --model_name meta-llama/Llama-3.2-3B-Instruct --output_dir ./lora_output
 ```

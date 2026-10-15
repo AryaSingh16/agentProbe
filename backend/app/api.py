@@ -428,7 +428,7 @@ def export_report_md():
 
 @router.get("/export/finetune.jsonl")
 def export_finetune_jsonl():
-    """Download sanitized fine-tuning examples from successful RobustAgent runs only."""
+    """Download sanitized training examples from successful RobustAgent runs only (optional LoRA workflow, not executed)."""
     runs = db_manager.list_runs(limit=1000)
     jsonl_content = generate_finetune_jsonl(runs)
     return Response(

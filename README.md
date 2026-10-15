@@ -177,28 +177,34 @@ Output: **2 passed**, production bundle built cleanly in ~5s.
 
 ---
 
-## 🔐 Security & Safety Boundaries
+---
+
+## 🔐 Security Boundaries
 
 - **In-Memory Sandboxing**: All tool invocations are executed in-memory with zero network or host side-effects.
-- **Zero Secret Leakage**: The fine-tuning export pipeline (`GET /api/export/finetune.jsonl`) automatically sanitizes authorization tokens and excludes prompt injection scenarios.
+- **Zero Secret Leakage**: The export pipeline (optional LoRA workflow, not executed; `GET /api/export/finetune.jsonl`) automatically sanitizes authorization tokens and excludes prompt injection scenarios.
 - **Database Corruption Tolerance**: The SQLite storage layer automatically detects corrupted database files, isolates them to `.corrupt.<timestamp>`, and initializes a clean database without crashing container startup.
 
 ---
 
-## ⚖️ What's Different
+## ⚖️ What Is and Isn't Claimed
 
-| Feature | Standard Evaluation | AgentProbe |
+| Claim / Feature | Evidence Status | Details |
 |---|---|---|
-| **Fault Evaluation** | Run static benchmarks or prompt variations | Active deterministic fault injection matrix (timeout, 500, malformed JSON, prompt injection) |
-| **Failure Diagnosis** | Vague natural-language LLM critique | Rule-based diagnosis strictly citing sequential trace event IDs (`E01`, `E02`...) |
-| **Failure Isolation** | Manual debugging of complex traces | Automated `ddmin` reduction to the minimal breaking fault set with counterfactual proof |
-| **Policy Hardening** | Manual prompt editing | Automated PolicyConfig patching with measured before/after verification re-run |
+| **Simulated Ops Environment & 5 Scenarios** | Simulated only | In-memory simulated environment with 4 mock tools and 5 deterministic scenarios. Zero real cloud side-effects. |
+| **Harness separation of Naive vs Robust policies** | Verified by tests | Deterministic simulated reference policies demonstrating harness sensitivity to retries, schema checks, data isolation, and postconditions. Not a general discovery about AI agents in general. |
+| **Delta Debugging (`ddmin`) minimal breaking fault set** | Verified by tests | Algorithmic reduction finding 1-fault minimal set with counterfactual verification across re-runs. |
+| **Auto-Hardening loop with measured re-run** | Verified by tests | Synthesizes PolicyConfig patches and measures counterfactual outcome on identical seeds. |
+| **Failure-Risk Predictor classifier** | Simulated only | scikit-learn Random Forest trained strictly on real stored runs (zero synthetic rows). Not evaluated for production deployment. Loud warning fires when $n < 200$. |
+| **Reference Cassettes** | Hand-authored & Recorded from a real model | Hand-authored reference traces and recorded live exchanges honestly marked with provenance in file metadata, API responses (`GET /api/cassettes`), and UI. |
+| **LoRA Fine-Tuning Pipeline (`finetune/train_lora.py`)** | Not executed | Optional LoRA workflow, not executed in Docker Compose or demo environment. No model was trained or fine-tuned. |
+| **Real LLM Integration** | Recorded from a real model / Optional live | Google Gemini API integration with rate-limiting, exponential backoff, and recorded replay cassettes, plus optional local Ollama profile. |
 
 ---
 
 ## ⚠️ Honest Limitations
 
-1. **Simulated Environment**: Operations are evaluated in an in-memory mock environment; passing these tests does not guarantee safety in production cloud architectures.
-2. **Predictor Dataset**: The failure-risk classifier uses scikit-learn trained on synthetic permutations and stored runs; it is a small-data demonstration and is not validated for mission-critical production decisions.
-3. **Fine-Tuning Script**: `finetune/train_lora.py` documents an optional GPU pipeline and is **not executed** in Docker Compose or tested in this demo environment.
-4. **Cassette Provenance**: The default cassettes are **hand-authored** demonstration traces, not captured from a production LLM deployment.
+1. **Simulated Environment**: Operations are evaluated in an in-memory mock environment with deterministic simulated agents; passing these tests does not guarantee security in real-world cloud architectures.
+2. **Predictor Dataset**: The failure-risk classifier uses scikit-learn trained strictly on real stored runs (zero synthetic rows); it is a small-data demonstration and is not evaluated for production decisions.
+3. **Training Script**: `finetune/train_lora.py` documents an optional LoRA workflow, not executed in Docker Compose or tested in this demo environment.
+4. **Cassette Provenance**: The default cassettes are hand-authored demonstration traces and recorded live exchanges, clearly labelled as such.

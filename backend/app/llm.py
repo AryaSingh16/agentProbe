@@ -212,24 +212,24 @@ Respond ONLY with valid JSON in this schema:
 
         try:
             parsed = json.loads(clean)
-            validated = LLMActionSchema(**parsed)
+            parsed_action = LLMActionSchema(**parsed)
             # Enforce tool allowlist
             allowed = ["get_health", "get_errors", "request_rollback", "verify_recovery", "finish"]
-            if validated.tool not in allowed:
+            if parsed_action.tool not in allowed:
                 self.invalid_output_errors += 1
                 return AgentAction(
                     tool="finish",
-                    thought=f"LLM proposed forbidden/unknown tool '{validated.tool}'. Halting.",
+                    thought=f"LLM proposed forbidden/unknown tool '{parsed_action.tool}'. Halting.",
                     is_finish=True,
-                    finish_reason=f"UNKNOWN_TOOL: {validated.tool}",
+                    finish_reason=f"UNKNOWN_TOOL: {parsed_action.tool}",
                 )
 
             return AgentAction(
-                tool=validated.tool,
-                args=validated.args,
-                thought=validated.thought,
-                is_finish=(validated.tool == "finish" or validated.is_finish),
-                finish_reason=validated.finish_reason or ("Finished by LLM" if validated.tool == "finish" else None),
+                tool=parsed_action.tool,
+                args=parsed_action.args,
+                thought=parsed_action.thought,
+                is_finish=(parsed_action.tool == "finish" or parsed_action.is_finish),
+                finish_reason=parsed_action.finish_reason or ("Finished by LLM" if parsed_action.tool == "finish" else None),
             )
         except Exception as e:
             self.invalid_output_errors += 1
