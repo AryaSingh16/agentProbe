@@ -30,20 +30,6 @@ AgentProbe provides a controlled, deterministic testing harness designed to isol
 
 ---
 
-## Screenshots
-
-Captured from local deployment at `http://localhost:3000`. Instructions for capturing screenshots are documented in [docs/screenshots/README.md](docs/screenshots/README.md).
-
-| Overview & Reliability Matrix | Run Lab & Policy Comparison |
-|---|---|
-| ![Overview](docs/screenshots/overview.png) | ![Run Lab](docs/screenshots/run-lab.png) |
-
-| Execution Trace & Root Cause Diagnosis | What-If Risk Estimator & Workbench |
-|---|---|
-| ![Trace & Diagnosis](docs/screenshots/trace.png) | ![Insights & Export](docs/screenshots/insights.png) |
-
----
-
 ## Key Features
 
 - **Deterministic Ops Sandbox**: Simulates service health inspections, log analysis, rollback triggers, and recovery verification with zero real-world infrastructure risk.
