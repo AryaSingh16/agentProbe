@@ -317,10 +317,19 @@ class DeterministicGrader:
 
         fault_types = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
         agents = ["naive", "robust", "llm"]
+        scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
 
         counts: Dict[str, Dict[str, Dict[str, int]]] = {
-            ag: {ft: {"passed": 0, "total": 0} for ft in fault_types}
+            ag: {ft: {"passed": 0, "total": 0, "faults_encountered": 0} for ft in fault_types}
             for ag in agents
+        }
+
+        counts_by_scenario: Dict[str, Dict[str, Dict[str, Dict[str, int]]]] = {
+            scen: {
+                ag: {ft: {"passed": 0, "total": 0, "faults_encountered": 0} for ft in fault_types}
+                for ag in agents
+            }
+            for scen in scenarios
         }
 
         agent_split: Dict[str, Dict[str, Dict[str, int]]] = {
@@ -334,8 +343,9 @@ class DeterministicGrader:
         for r in runs:
             raw_ag = r.get("agent_type", "")
             ag = cls.normalize_agent_name(raw_ag)
+            scen = r.get("scenario_id", "")
             if ag not in counts:
-                counts[ag] = {ft: {"passed": 0, "total": 0} for ft in fault_types}
+                counts[ag] = {ft: {"passed": 0, "total": 0, "faults_encountered": 0} for ft in fault_types}
                 agent_split[ag] = {
                     "baseline": {"passed": 0, "total": 0},
                     "faulted": {"passed": 0, "total": 0},
@@ -344,13 +354,32 @@ class DeterministicGrader:
             schedule = r.get("fault_schedule") or []
             ft = schedule[0].get("type") if (schedule and isinstance(schedule[0], dict)) else "none"
             if ft not in counts[ag]:
-                counts[ag][ft] = {"passed": 0, "total": 0}
+                counts[ag][ft] = {"passed": 0, "total": 0, "faults_encountered": 0}
 
-            counts[ag][ft]["total"] += 1
             grader = r.get("grader_result") or {}
             is_passed = (grader.get("verdict") == "PASSED")
+            enc = grader.get("faults_encountered", 0)
+
+            counts[ag][ft]["total"] += 1
             if is_passed:
                 counts[ag][ft]["passed"] += 1
+            counts[ag][ft]["faults_encountered"] += enc
+
+            if scen:
+                if scen not in counts_by_scenario:
+                    counts_by_scenario[scen] = {
+                        a: {f: {"passed": 0, "total": 0, "faults_encountered": 0} for f in fault_types}
+                        for a in agents
+                    }
+                if ag not in counts_by_scenario[scen]:
+                    counts_by_scenario[scen][ag] = {f: {"passed": 0, "total": 0, "faults_encountered": 0} for f in fault_types}
+                if ft not in counts_by_scenario[scen][ag]:
+                    counts_by_scenario[scen][ag][ft] = {"passed": 0, "total": 0, "faults_encountered": 0}
+
+                counts_by_scenario[scen][ag][ft]["total"] += 1
+                if is_passed:
+                    counts_by_scenario[scen][ag][ft]["passed"] += 1
+                counts_by_scenario[scen][ag][ft]["faults_encountered"] += enc
 
             if not schedule or ft == "none":
                 agent_split[ag]["baseline"]["total"] += 1
@@ -368,15 +397,17 @@ class DeterministicGrader:
             formatted_matrix[ag] = {}
             matrix_details[ag] = {}
             for ft in fault_types:
-                c = counts.get(ag, {}).get(ft, {"passed": 0, "total": 0})
+                c = counts.get(ag, {}).get(ft, {"passed": 0, "total": 0, "faults_encountered": 0})
                 p = c["passed"]
                 t = c["total"]
+                enc = c.get("faults_encountered", 0)
                 rate = round(p / t, 4) if t > 0 else None
                 low, high = wilson_score_interval(p, t)
                 formatted_matrix[ag][ft] = rate
                 matrix_details[ag][ft] = {
                     "passed": p,
                     "total": t,
+                    "faults_encountered": enc,
                     "rate": rate,
                     "formatted": format_rate_with_n(p, t) if t > 0 else "N/A",
                     "ci_lower": low,
@@ -384,7 +415,56 @@ class DeterministicGrader:
                     "ci_95": [low, high] if low is not None else None,
                     "is_low_sample": (t < 10),
                     "no_runs_yet": (t == 0),
+                    "not_applicable": False,
                 }
+
+        matrix_by_scenario: Dict[str, Dict[str, Dict[str, Optional[float]]]] = {}
+        matrix_details_by_scenario: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+        for scen, s_counts in counts_by_scenario.items():
+            matrix_by_scenario[scen] = {}
+            matrix_details_by_scenario[scen] = {}
+            is_unwinnable_scen = (scen == "unfixable_rollback")
+
+            for ag in agents:
+                matrix_by_scenario[scen][ag] = {}
+                matrix_details_by_scenario[scen][ag] = {}
+                for ft in fault_types:
+                    c = s_counts.get(ag, {}).get(ft, {"passed": 0, "total": 0, "faults_encountered": 0})
+                    p = c["passed"]
+                    t = c["total"]
+                    enc = c.get("faults_encountered", 0)
+                    rate = round(p / t, 4) if t > 0 else None
+                    low, high = wilson_score_interval(p, t)
+
+                    not_applicable = bool(t > 0 and ft != "none" and enc == 0)
+
+                    if not_applicable:
+                        display_fmt = "Not applicable"
+                        eff_rate = None
+                    elif t > 0:
+                        display_fmt = format_rate_with_n(p, t)
+                        eff_rate = rate
+                    else:
+                        display_fmt = "N/A"
+                        eff_rate = None
+
+                    matrix_by_scenario[scen][ag][ft] = eff_rate
+                    matrix_details_by_scenario[scen][ag][ft] = {
+                        "passed": p,
+                        "total": t,
+                        "faults_encountered": enc,
+                        "rate": eff_rate,
+                        "formatted": display_fmt,
+                        "ci_lower": low if not not_applicable else None,
+                        "ci_upper": high if not not_applicable else None,
+                        "ci_95": [low, high] if (low is not None and not not_applicable) else None,
+                        "is_low_sample": (t < 10),
+                        "no_runs_yet": (t == 0),
+                        "not_applicable": not_applicable,
+                        "is_unwinnable": is_unwinnable_scen,
+                        "unwinnable_note": "Service has persistent database corruption; remediation cannot succeed (capped at 0%)." if is_unwinnable_scen else None,
+                    }
 
         b_p = sum(agent_split[ag]["baseline"]["passed"] for ag in agents)
         b_t = sum(agent_split[ag]["baseline"]["total"] for ag in agents)
@@ -439,5 +519,8 @@ class DeterministicGrader:
             "aggregates": aggs.model_dump(),
             "matrix": formatted_matrix,
             "matrix_details": matrix_details,
+            "matrix_by_scenario": matrix_by_scenario,
+            "matrix_details_by_scenario": matrix_details_by_scenario,
             "baseline_vs_faulted": baseline_vs_faulted,
+            "unwinnable_scenarios": ["unfixable_rollback"],
         }

@@ -64,13 +64,18 @@ export async function createRun(payload: {
   return res.json();
 }
 
-export async function fetchMetrics(): Promise<{
+export async function fetchMetrics(scenarioId?: string): Promise<{
   aggregates: AggregateMetrics;
   reliability_matrix: Record<string, Record<string, number | null>>;
   reliability_matrix_details?: Record<string, Record<string, any>>;
+  matrix_by_scenario?: Record<string, Record<string, Record<string, number | null>>>;
+  matrix_details_by_scenario?: Record<string, Record<string, Record<string, any>>>;
   baseline_vs_faulted?: Record<string, any>;
+  unwinnable_scenarios?: string[];
+  selected_scenario?: string;
 }> {
-  const res = await fetch(`${API_BASE}/metrics`);
+  const url = scenarioId && scenarioId !== 'all' ? `${API_BASE}/metrics?scenario_id=${scenarioId}` : `${API_BASE}/metrics`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch metrics');
   return res.json();
 }

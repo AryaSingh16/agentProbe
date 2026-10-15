@@ -1,13 +1,24 @@
-"""
-AgentProbe Backend Entrypoint:
-FastAPI application with CORS, OpenAPI documentation, and versioned /api routes.
-"""
+import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import router
+from app.api import router, ensure_coverage_runs
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run once at startup only if coverage cells are missing
+    try:
+        ensure_coverage_runs()
+    except Exception as e:
+        logger.warning(f"Startup coverage seeding error: {e}")
+    yield
+
 
 app = FastAPI(
     title="AgentProbe API",
@@ -15,6 +26,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Configure CORS

@@ -49,9 +49,31 @@ export const InsightsExport: React.FC = () => {
     verify_postconditions: false,
   });
 
-  const [prediction, setPrediction] = useState<PredictorPredictResponse | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState<boolean>(false);
   const [clearInput, setClearInput] = useState<string>('');
+
+  // What-if Risk Estimator Query keyed by all input parameters (prevents stale state):
+  const riskEstimateQuery = useQuery({
+    queryKey: [
+      'risk-estimate',
+      scenarioId,
+      faultType,
+      faultIntensity,
+      policy.max_retries,
+      policy.validate_schema,
+      policy.treat_output_as_data,
+      policy.verify_postconditions,
+    ],
+    queryFn: () =>
+      predictRisk({
+        scenario_id: scenarioId,
+        policy,
+        fault_type: faultType === 'none' ? null : faultType,
+        fault_intensity: faultType === 'none' ? 0 : faultIntensity,
+      }),
+  });
+
+  const prediction = riskEstimateQuery.data ?? null;
 
   // Markdown Report Preview Query
   const { data: reportPreview, refetch: refetchReport } = useQuery({
@@ -60,18 +82,6 @@ export const InsightsExport: React.FC = () => {
       const res = await fetch('/api/export/report.md');
       return res.text();
     },
-  });
-
-  // Predict Mutation
-  const predictMutation = useMutation({
-    mutationFn: () =>
-      predictRisk({
-        scenario_id: scenarioId,
-        policy,
-        fault_type: faultType === 'none' ? null : faultType,
-        fault_intensity: faultType === 'none' ? 0 : faultIntensity,
-      }),
-    onSuccess: (data) => setPrediction(data),
   });
 
   // Clear Mutation
@@ -232,12 +242,12 @@ export const InsightsExport: React.FC = () => {
             </div>
 
             <button
-              onClick={() => predictMutation.mutate()}
-              disabled={predictMutation.isPending}
+              onClick={() => riskEstimateQuery.refetch()}
+              disabled={riskEstimateQuery.isFetching}
               className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition"
             >
               <TrendingUp className="w-4 h-4" />
-              {predictMutation.isPending ? 'Calculating risk...' : 'Estimate failure risk'}
+              {riskEstimateQuery.isFetching ? 'Calculating risk...' : 'Estimate failure risk'}
             </button>
           </div>
 

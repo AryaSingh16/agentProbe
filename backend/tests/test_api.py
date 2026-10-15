@@ -274,3 +274,134 @@ def test_diagnosis_grouped_citations_match_trace():
     fail_trace_ids = {e["event_id"] for e in res_fail["trace"]}
     fail_cited = set(re.findall(r"\bE\d{2}\b", " ".join(diag_fail["observed_facts"]) + " " + diag_fail["inferred_explanation"]))
     assert fail_cited.issubset(fail_trace_ids)
+
+
+def test_matrix_per_scenario_cells_not_all_identical():
+    """
+    Verifies that per-scenario matrix cells are not all identical when simulator
+    results differ, that /api/metrics?scenario_id=... returns scoped results,
+    and that not_applicable flags are properly marked.
+    """
+    # Run robust agent on bad_deploy (winnable) and unfixable_rollback (unwinnable)
+    client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "robust",
+        "fault_type": None,
+        "fault_intensity": 0,
+        "seed": 42,
+    })
+    client.post("/api/runs", json={
+        "scenario_id": "unfixable_rollback",
+        "agent_type": "robust",
+        "fault_type": None,
+        "fault_intensity": 0,
+        "seed": 42,
+    })
+
+    # Query metrics
+    res = client.get("/api/metrics")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert "matrix_by_scenario" in data
+    assert "matrix_details_by_scenario" in data
+    assert "unwinnable_scenarios" in data
+    assert "unfixable_rollback" in data["unwinnable_scenarios"]
+
+    matrix_by_scen = data["matrix_by_scenario"]
+    # Check that bad_deploy passed (1.0) and unfixable_rollback failed (0.0)
+    bd_val = matrix_by_scen.get("bad_deploy", {}).get("robust", {}).get("none")
+    ur_val = matrix_by_scen.get("unfixable_rollback", {}).get("robust", {}).get("none")
+
+    assert bd_val == 1.0, f"Expected 1.0 for bad_deploy, got {bd_val}"
+    assert ur_val == 0.0, f"Expected 0.0 for unfixable_rollback, got {ur_val}"
+    assert bd_val != ur_val, "Per-scenario cells must differ when simulator outcomes differ!"
+
+    # Query filtered by scenario_id
+    res_bd = client.get("/api/metrics?scenario_id=bad_deploy").json()
+    assert res_bd["selected_scenario"] == "bad_deploy"
+    assert res_bd["reliability_matrix"]["robust"]["none"] == 1.0
+
+    res_ur = client.get("/api/metrics?scenario_id=unfixable_rollback").json()
+    assert res_ur["selected_scenario"] == "unfixable_rollback"
+    assert res_ur["reliability_matrix"]["robust"]["none"] == 0.0
+
+
+def test_matrix_progress_units_and_completed_never_exceeds_total():
+    """
+    Asserts that matrix job progress reports both completed and total in runs,
+    and completed_runs <= total_runs always.
+    """
+    req_payload = {
+        "scenarios": ["healthy_service", "bad_deploy"],
+        "agents": ["naive", "robust"],
+        "fault_types": ["none", "timeout"],
+        "intensity": 1,
+        "seed": 100,
+        "seed_count": 2,
+    }
+    # Expected total runs = 2 scenarios * 2 agents * 2 fault types * 2 seeds = 16 runs
+    res = client.post("/api/matrix", json=req_payload)
+    assert res.status_code == 200
+    data = res.json()
+    job_id = data["job_id"]
+    assert data["total_runs"] == 16
+
+    # Fetch job status
+    status_res = client.get(f"/api/matrix/{job_id}")
+    assert status_res.status_code == 200
+    status_data = status_res.json()
+    assert status_data["total_runs"] == 16
+    assert status_data["completed_runs"] <= status_data["total_runs"]
+    assert 0 <= status_data["completed_runs"]
+
+
+def test_metrics_request_creates_zero_new_runs():
+    """
+    Asserts that a GET /api/metrics request is strictly non-mutating
+    and creates zero new runs.
+    """
+    from app.db import db_manager
+    runs_before = len(db_manager.list_all_runs())
+
+    # Send multiple GET /api/metrics requests
+    res1 = client.get("/api/metrics")
+    assert res1.status_code == 200
+    res2 = client.get("/api/metrics?scenario_id=bad_deploy")
+    assert res2.status_code == 200
+
+    runs_after = len(db_manager.list_all_runs())
+    assert runs_after == runs_before, f"GET /api/metrics mutated DB! Before: {runs_before}, After: {runs_after}"
+
+
+def test_new_run_appears_first_in_history_and_runs_endpoints():
+    """
+    Asserts that when a new run is created, it appears first (most recent)
+    in both /api/history and /api/runs.
+    """
+    unique_seed = 99999
+    create_res = client.post("/api/runs", json={
+        "scenario_id": "healthy_service",
+        "agent_type": "naive",
+        "fault_type": None,
+        "fault_intensity": 0,
+        "seed": unique_seed,
+    })
+    assert create_res.status_code == 200
+    created_id = create_res.json()["id"]
+
+    # Verify in /api/history
+    hist_res = client.get("/api/history?limit=10&offset=0")
+    assert hist_res.status_code == 200
+    hist_runs = hist_res.json()
+    assert len(hist_runs) > 0
+    assert hist_runs[0]["id"] == created_id, f"Expected {created_id} first in /api/history, got {hist_runs[0]['id']}"
+
+    # Verify in /api/runs
+    runs_res = client.get("/api/runs?limit=10&offset=0")
+    assert runs_res.status_code == 200
+    runs_list = runs_res.json()
+    assert len(runs_list) > 0
+    assert runs_list[0]["id"] == created_id, f"Expected {created_id} first in /api/runs, got {runs_list[0]['id']}"
+
+

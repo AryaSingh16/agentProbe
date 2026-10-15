@@ -69,6 +69,7 @@ export const TraceDiagnosis: React.FC = () => {
   const { data: runsList } = useQuery({
     queryKey: ['runs-list'],
     queryFn: () => fetchRuns(50, 0),
+    refetchInterval: 5000,
   });
 
   // Automatically select the first run if none selected

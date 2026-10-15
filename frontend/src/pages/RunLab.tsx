@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -87,12 +87,26 @@ export const RunLab: React.FC = () => {
     },
   });
 
+  // Invalidate queries when matrix job completes or fails
+  useEffect(() => {
+    if (matrixStatus?.status === 'completed' || matrixStatus?.status === 'failed') {
+      queryClient.invalidateQueries({ queryKey: ['metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+      queryClient.invalidateQueries({ queryKey: ['history'] });
+    }
+  }, [matrixStatus?.status, queryClient]);
+
   // Run Mutation
   const runMutation = useMutation({
     mutationFn: createRun,
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
+      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+      queryClient.invalidateQueries({ queryKey: ['history'] });
       setStatusMessage(`Run completed with verdict: ${data.grader_result.verdict}`);
       setErrorMessage(null);
       // Navigate to trace view
@@ -190,29 +204,41 @@ export const RunLab: React.FC = () => {
       )}
 
       {/* Matrix Job Progress Banner */}
-      {matrixStatus && (
-        <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 text-xs flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Layers className="w-5 h-5 text-indigo-400 animate-pulse" />
-            <div>
-              <div className="font-semibold text-slate-200">
-                Evaluation Matrix: <span className="text-indigo-400">{matrixStatus.status.toUpperCase()}</span>
-              </div>
-              <div className="text-slate-400 mt-0.5">
-                Executed {matrixStatus.completed_runs} of {matrixStatus.total_runs} combinations across scenarios and policies.
+      {matrixStatus && (() => {
+        const totalRuns = Math.max(1, matrixStatus.total_runs || 1);
+        const completedRuns = Math.min(matrixStatus.completed_runs || 0, totalRuns);
+        const progressPct = Math.min(100, Math.round((completedRuns / totalRuns) * 100));
+
+        return (
+          <div className="p-4 rounded-lg bg-slate-900 border border-slate-800 text-xs flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3 w-full md:w-auto">
+              <Layers className="w-5 h-5 text-indigo-400 animate-pulse shrink-0" />
+              <div className="w-full">
+                <div className="font-semibold text-slate-200">
+                  Evaluation Matrix: <span className="text-indigo-400">{matrixStatus.status.toUpperCase()}</span>
+                </div>
+                <div className="text-slate-400 mt-0.5">
+                  Completed {completedRuns} of {totalRuns} runs ({progressPct}%)
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden max-w-xs">
+                  <div
+                    className="bg-indigo-500 h-1.5 rounded-full transition-all duration-300"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
               </div>
             </div>
+            {matrixStatus.status === 'completed' && (
+              <button
+                onClick={() => navigate('/')}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold shrink-0"
+              >
+                View Updated Reliability Matrix
+              </button>
+            )}
           </div>
-          {matrixStatus.status === 'completed' && (
-            <button
-              onClick={() => navigate('/')}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-semibold"
-            >
-              View Updated Reliability Matrix
-            </button>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* Config Form Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

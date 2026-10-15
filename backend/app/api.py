@@ -109,8 +109,9 @@ def create_run(req: RunCreateRequest):
 
 
 @router.get("/runs", response_model=List[RunResponse])
+@router.get("/history", response_model=List[RunResponse])
 def list_runs(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0)):
-    """List stored runs with pagination."""
+    """List stored runs with pagination (newest first)."""
     return db_manager.list_runs(limit=limit, offset=offset)
 
 
@@ -127,6 +128,7 @@ def ensure_coverage_runs():
     """
     Ensures that the reliability matrix has coverage across empty_response and
     offline replay cassette runs for llm across fault types.
+    Executed once at startup only if cells are missing.
     """
     runs = db_manager.list_all_runs()
     scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
@@ -168,16 +170,36 @@ def ensure_coverage_runs():
 
 
 @router.get("/metrics")
-def get_metrics():
+def get_metrics(scenario_id: Optional[str] = None):
     """Calculate aggregate KPIs and reliability matrix heatmap across stored runs."""
-    ensure_coverage_runs()
     runs = db_manager.list_all_runs()
     analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in runs])
+
+    if scenario_id and scenario_id != "all":
+        scen_matrix = analysis.get("matrix_by_scenario", {}).get(scenario_id, analysis["matrix"])
+        scen_details = analysis.get("matrix_details_by_scenario", {}).get(scenario_id, analysis["matrix_details"])
+        filtered_runs = [r for r in runs if r.scenario_id == scenario_id]
+        scen_analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in filtered_runs])
+        return {
+            "aggregates": scen_analysis["aggregates"],
+            "reliability_matrix": scen_matrix,
+            "reliability_matrix_details": scen_details,
+            "matrix_by_scenario": analysis.get("matrix_by_scenario", {}),
+            "matrix_details_by_scenario": analysis.get("matrix_details_by_scenario", {}),
+            "baseline_vs_faulted": scen_analysis["baseline_vs_faulted"],
+            "unwinnable_scenarios": ["unfixable_rollback"],
+            "selected_scenario": scenario_id,
+        }
+
     return {
         "aggregates": analysis["aggregates"],
         "reliability_matrix": analysis["matrix"],
         "reliability_matrix_details": analysis["matrix_details"],
+        "matrix_by_scenario": analysis.get("matrix_by_scenario", {}),
+        "matrix_details_by_scenario": analysis.get("matrix_details_by_scenario", {}),
         "baseline_vs_faulted": analysis["baseline_vs_faulted"],
+        "unwinnable_scenarios": ["unfixable_rollback"],
+        "selected_scenario": "all",
     }
 
 
@@ -209,6 +231,13 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                         db_manager.save_run(res)
                         executed_runs.append(res)
 
+                        if len(executed_runs) % 20 == 0:
+                            job.results_json = json.dumps({
+                                "total_runs": total_runs,
+                                "completed_runs": len(executed_runs),
+                            })
+                            db_manager.save_matrix_job(job)
+
         analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in executed_runs])
 
         job.status = "completed"
@@ -218,6 +247,8 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
             "completed_runs": len(executed_runs),
             "heatmap": analysis["matrix"],
             "heatmap_details": analysis["matrix_details"],
+            "matrix_by_scenario": analysis.get("matrix_by_scenario", {}),
+            "matrix_details_by_scenario": analysis.get("matrix_details_by_scenario", {}),
             "baseline_vs_faulted": analysis["baseline_vs_faulted"],
             "aggregates": analysis["aggregates"],
         })
@@ -261,7 +292,9 @@ def get_matrix_job(job_id: str):
         raise HTTPException(status_code=404, detail=f"Matrix job '{job_id}' not found")
 
     cfg = json.loads(job.config_json)
-    total_runs = len(cfg.get("scenarios", [])) * len(cfg.get("agents", [])) * len(cfg.get("fault_types", []))
+    active_seeds = cfg.get("seeds")
+    seed_count = len(active_seeds) if (active_seeds and len(active_seeds) > 0) else cfg.get("seed_count", 1)
+    total_runs = len(cfg.get("scenarios", [])) * len(cfg.get("agents", [])) * len(cfg.get("fault_types", [])) * max(1, seed_count)
 
     heatmap = None
     summary = None
@@ -271,7 +304,9 @@ def get_matrix_job(job_id: str):
         results = json.loads(job.results_json)
         heatmap = results.get("heatmap")
         summary = results.get("aggregates")
-        completed_runs = results.get("completed_runs", total_runs if job.status == "completed" else 0)
+        total_runs = results.get("total_runs", total_runs)
+        raw_completed = results.get("completed_runs", total_runs if job.status == "completed" else 0)
+        completed_runs = min(raw_completed, total_runs)
 
     return MatrixJobStatusResponse(
         job_id=job.id,

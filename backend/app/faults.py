@@ -107,8 +107,10 @@ def generate_fault_schedule(
     """
     Deterministic generation of FaultSchedule based on scenario, fault_type, intensity, and seed.
     Intensity = number of faults scheduled (0 means no faults).
+    When fault_type is None or 'none', returns empty list (clean baseline).
+    Different seeds deterministically target different tools and call indices.
     """
-    if intensity <= 0:
+    if intensity <= 0 or fault_type in (None, "none"):
         return []
 
     rng = random.Random(seed)
@@ -134,14 +136,17 @@ def generate_fault_schedule(
         else:
             f_type = rng.choice(types_pool)
 
-        # Distribute across tools deterministically
-        tool = tools[i % len(tools)]
-        call_idx = (i // len(tools)) + 1
+        # Distribute across tools deterministically based on seed + i
+        tool_idx = (seed + i) % len(tools)
+        tool = tools[tool_idx]
+        call_idx = 1 + ((seed + i) // len(tools)) % 2
 
         key = (tool, call_idx)
-        if key in used_keys:
+        attempts = 0
+        while key in used_keys and attempts < 10:
             call_idx += 1
             key = (tool, call_idx)
+            attempts += 1
         used_keys.add(key)
 
         count = 2 if f_type == FaultType.TRANSIENT_THEN_SUCCESS else 1

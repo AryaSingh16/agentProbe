@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { fetchMetrics, fetchRuns } from '../api';
@@ -31,9 +31,11 @@ import {
 } from 'recharts';
 
 export const Overview: React.FC = () => {
+  const [selectedScenario, setSelectedScenario] = useState<string>('all');
+
   const { data: metricsData } = useQuery({
-    queryKey: ['metrics'],
-    queryFn: fetchMetrics,
+    queryKey: ['metrics', selectedScenario],
+    queryFn: () => fetchMetrics(selectedScenario),
     refetchInterval: 5000,
   });
 
@@ -63,7 +65,8 @@ export const Overview: React.FC = () => {
     },
   ];
 
-  const getHeatmapColor = (val: number | null | undefined) => {
+  const getHeatmapColor = (val: number | null | undefined, isNA?: boolean) => {
+    if (isNA) return 'bg-slate-800/80 text-slate-400 border-slate-700/60';
     if (val === null || val === undefined) return 'bg-gray-800 text-gray-400 border-gray-700';
     if (val >= 0.8) return 'bg-emerald-950/70 text-emerald-300 border-emerald-700/50';
     if (val >= 0.4) return 'bg-amber-950/70 text-amber-300 border-amber-700/50';
@@ -228,22 +231,74 @@ export const Overview: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Reliability Matrix Heatmap (2 cols) */}
         <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" /> Reliability Matrix
-            </h2>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="flex items-center gap-1.5 text-emerald-400">
-                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-700 inline-block"></span> ≥80%
-              </span>
-              <span className="flex items-center gap-1.5 text-amber-400">
-                <span className="w-2.5 h-2.5 rounded-sm bg-amber-700 inline-block"></span> 40–79%
-              </span>
-              <span className="flex items-center gap-1.5 text-rose-400">
-                <span className="w-2.5 h-2.5 rounded-sm bg-rose-700 inline-block"></span> &lt;40%
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-400" /> Reliability Matrix
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Pass rates across agent policies and controlled fault injections.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <label htmlFor="scenario-filter" className="text-xs text-slate-400 font-medium">
+                  Scenario:
+                </label>
+                <select
+                  id="scenario-filter"
+                  data-testid="scenario-filter"
+                  value={selectedScenario}
+                  onChange={(e) => setSelectedScenario(e.target.value)}
+                  className="px-2.5 py-1 text-xs bg-slate-800 border border-slate-700 rounded text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="all">All scenarios</option>
+                  <option value="healthy_service">{getScenarioLabel('healthy_service')}</option>
+                  <option value="bad_deploy">{getScenarioLabel('bad_deploy')}</option>
+                  <option value="rollback_denied">{getScenarioLabel('rollback_denied')}</option>
+                  <option value="unfixable_rollback">{getScenarioLabel('unfixable_rollback')}</option>
+                  <option value="injected_instruction">{getScenarioLabel('injected_instruction')}</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs border-l border-slate-800 pl-3">
+                <span className="flex items-center gap-1.5 text-emerald-400">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-emerald-700 inline-block"></span> ≥80%
+                </span>
+                <span className="flex items-center gap-1.5 text-amber-400">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-amber-700 inline-block"></span> 40–79%
+                </span>
+                <span className="flex items-center gap-1.5 text-rose-400">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-rose-700 inline-block"></span> &lt;40%
+                </span>
+              </div>
             </div>
           </div>
+
+          {/* Unwinnable Scenario Notice / Cap Explanation */}
+          {selectedScenario === 'all' && (
+            <div
+              title="Rollback cannot fix persistent database corruption by design. This caps the aggregate success rate across all 5 scenarios at 80%."
+              className="mb-4 p-2.5 rounded bg-indigo-950/40 border border-indigo-800/60 text-indigo-300 text-xs flex items-center gap-2 cursor-help"
+            >
+              <Info className="w-4 h-4 shrink-0 text-indigo-400" />
+              <span>
+                <strong>Unwinnable scenario cap:</strong> &ldquo;Rollback can&apos;t fix it&rdquo; has persistent database corruption and cannot be remediated (0% success), capping aggregate multi-scenario pass rate at 80.0%. Select individual scenarios above to inspect per-scenario results.
+              </span>
+            </div>
+          )}
+
+          {selectedScenario === 'unfixable_rollback' && (
+            <div
+              className="mb-4 p-2.5 rounded bg-amber-950/40 border border-amber-800/60 text-amber-300 text-xs flex items-center gap-2"
+            >
+              <ShieldAlert className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>
+                <strong>Unwinnable incident:</strong> In &ldquo;Rollback can&apos;t fix it&rdquo;, the database is corrupted and rollback cannot remediate the degradation. Graded as failed remediation by design (capped at 0% pass rate).
+              </span>
+            </div>
+          )}
 
           <div className="w-full">
             <table className="w-full text-xs text-left border-collapse table-fixed">
@@ -273,23 +328,35 @@ export const Overview: React.FC = () => {
                       {faultTypes.map((ft) => {
                         const val = agentData[ft];
                         const detail = agentDetails[ft];
-                        const displayVal = val !== undefined && val !== null ? `${Math.round(val * 100)}%` : 'N/A';
-                        const ciTooltip = detail?.ci_lower !== null && detail?.ci_lower !== undefined
-                          ? `Pass rate: ${detail.passed}/${detail.total} (${displayVal}) • Likely range: ${(detail.ci_lower * 100).toFixed(1)}% – ${(detail.ci_upper * 100).toFixed(1)}%${detail.is_low_sample ? ' • Low sample size (<10 runs)' : ''}`
-                          : 'No runs recorded for this cell';
+                        const isNotApplicable = detail?.not_applicable;
+                        const displayVal = isNotApplicable
+                          ? 'Not applicable'
+                          : (val !== undefined && val !== null ? `${Math.round(val * 100)}%` : 'N/A');
+
+                        let ciTooltip = '';
+                        if (isNotApplicable) {
+                          ciTooltip = 'Not applicable: Fault type was not encountered because the agent workflow for this scenario does not reach the targeted tool or call index.';
+                        } else if (detail?.is_unwinnable) {
+                          ciTooltip = `Pass rate: ${detail.passed}/${detail.total} (0%) • Unwinnable scenario (service corruption persists after rollback)`;
+                        } else if (detail?.ci_lower !== null && detail?.ci_lower !== undefined) {
+                          ciTooltip = `Pass rate: ${detail.passed}/${detail.total} (${displayVal}) • Likely range: ${(detail.ci_lower * 100).toFixed(1)}% – ${(detail.ci_upper * 100).toFixed(1)}%${detail.is_low_sample ? ' • Low sample size (<10 runs)' : ''}`;
+                        } else {
+                          ciTooltip = 'No runs recorded for this cell';
+                        }
+
                         return (
                           <td key={ft} className="py-2 px-1 text-center">
                             <div
                               title={ciTooltip}
-                              className={`py-1.5 px-1 rounded border text-xs font-semibold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val)}`}
+                              className={`py-1.5 px-1 rounded border text-xs font-semibold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val, isNotApplicable)}`}
                             >
-                              <span>{displayVal}</span>
-                              {detail && detail.total > 0 && (
+                              <span className={isNotApplicable ? 'text-[10px] font-medium leading-tight' : ''}>{displayVal}</span>
+                              {detail && detail.total > 0 && !isNotApplicable && (
                                 <span className="text-[10px] font-normal opacity-85">
                                   {detail.passed}/{detail.total}
                                 </span>
                               )}
-                              {detail && detail.is_low_sample && detail.total > 0 && (
+                              {detail && detail.is_low_sample && detail.total > 0 && !isNotApplicable && (
                                 <span
                                   title="Low sample size (<10 runs)"
                                   className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block mt-0.5"
