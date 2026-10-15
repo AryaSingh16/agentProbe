@@ -205,6 +205,24 @@ globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       json: () => Promise.resolve(mockRun),
     });
   }
+  if (url.includes('/api/matrix/batches')) {
+    return Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve([
+          {
+            batch_id: 'job_test123',
+            created_at: '2026-10-15T10:00:00Z',
+            status: 'completed',
+            total_runs: 60,
+            passed_runs: 48,
+            pass_rate: 0.8,
+            summary: 'Full matrix: 60 runs, 80% passed',
+            runs: [mockRun],
+          },
+        ]),
+    });
+  }
   if (url.includes('/api/runs')) {
     return Promise.resolve({
       ok: true,

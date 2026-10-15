@@ -61,6 +61,19 @@ export interface RunResponse {
   grader_result: GraderResult;
   metrics: RunMetrics;
   created_at: string;
+  source?: string;
+  batch_id?: string | null;
+}
+
+export interface MatrixBatch {
+  batch_id: string;
+  created_at: string;
+  status: string;
+  total_runs: number;
+  passed_runs: number;
+  pass_rate: number;
+  summary: string;
+  runs: RunResponse[];
 }
 
 export interface ScenarioSpec {

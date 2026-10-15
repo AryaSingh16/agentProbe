@@ -106,6 +106,12 @@ beforeEach(() => {
         json: () => Promise.resolve([]),
       });
     }
+    if (url.includes('/api/matrix/batches')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+    }
     if (url.includes('/api/runs')) {
       if (options?.method === 'POST') {
         const body = options.body ? JSON.parse(options.body as string) : {};

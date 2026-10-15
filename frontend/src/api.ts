@@ -3,6 +3,7 @@ import {
   CassetteMetadata,
   Diagnosis,
   HardeningResult,
+  MatrixBatch,
   MatrixJobStatusResponse,
   MinimalFaultSet,
   PolicyConfig,
@@ -32,10 +33,39 @@ export async function fetchCassettes(): Promise<CassetteMetadata[]> {
   return res.json();
 }
 
-export async function fetchRuns(limit = 100, offset = 0): Promise<RunResponse[]> {
-  const url = `${API_BASE}/runs?limit=${limit}&offset=${offset}`;
+export interface RunFilters {
+  agent?: string;
+  scenario_id?: string;
+  verdict?: string;
+  batch_id?: string;
+  show?: 'single' | 'batch' | 'all';
+  scope?: string;
+}
+
+export async function fetchRuns(
+  limit = 100,
+  offset = 0,
+  filters?: RunFilters
+): Promise<RunResponse[]> {
+  const params = new URLSearchParams();
+  params.append('limit', String(limit));
+  params.append('offset', String(offset));
+  if (filters?.agent && filters.agent !== 'all') params.append('agent', filters.agent);
+  if (filters?.scenario_id && filters.scenario_id !== 'all') params.append('scenario_id', filters.scenario_id);
+  if (filters?.verdict && filters.verdict !== 'all') params.append('verdict', filters.verdict);
+  if (filters?.batch_id) params.append('batch_id', filters.batch_id);
+  if (filters?.show && filters.show !== 'all') params.append('show', filters.show);
+  if (filters?.scope && filters.scope !== 'all') params.append('scope', filters.scope);
+
+  const url = `${API_BASE}/runs?${params.toString()}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch runs');
+  return res.json();
+}
+
+export async function fetchMatrixBatches(): Promise<MatrixBatch[]> {
+  const res = await fetch(`${API_BASE}/matrix/batches`);
+  if (!res.ok) throw new Error('Failed to fetch matrix batches');
   return res.json();
 }
 

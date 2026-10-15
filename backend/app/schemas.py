@@ -152,6 +152,7 @@ class RunResponse(BaseModel):
     created_at: str
     provenance: str = "simulator-generated"
     source: str = "user"
+    batch_id: Optional[str] = None
 
 
 class MinimalFaultSet(BaseModel):

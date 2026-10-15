@@ -41,6 +41,7 @@ class RunRecord(SQLModel, table=True):
     metrics_json: str
     created_at: str = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     source: str = Field(default="user", index=True)  # 'user' | 'demo_seed'
+    batch_id: Optional[str] = Field(default=None, index=True)  # null for single runs, job_id for matrix runs
 
 
 class SettingRecord(SQLModel, table=True):
@@ -82,7 +83,7 @@ class DatabaseManager:
         try:
             self.engine = create_engine(self.db_url, connect_args={"check_same_thread": False} if "sqlite" in self.db_url else {})
             SQLModel.metadata.create_all(self.engine)
-            # Additive migration: check if 'source' exists in 'runs'
+            # Additive migration: check if 'source' and 'batch_id' exist in 'runs'
             from sqlalchemy import text
             with self.engine.connect() as conn:
                 try:
@@ -91,6 +92,10 @@ class DatabaseManager:
                         conn.execute(text("ALTER TABLE runs ADD COLUMN source VARCHAR DEFAULT 'user'"))
                         conn.commit()
                         logger.info("Migrated 'runs' table: added 'source' column.")
+                    if columns and "batch_id" not in columns:
+                        conn.execute(text("ALTER TABLE runs ADD COLUMN batch_id VARCHAR DEFAULT NULL"))
+                        conn.commit()
+                        logger.info("Migrated 'runs' table: added 'batch_id' column.")
                 except Exception as mig_err:
                     logger.debug(f"Migration probe: {mig_err}")
 
@@ -132,9 +137,10 @@ class DatabaseManager:
             session.commit()
             self.data_version += 1
 
-    def save_run(self, run: RunResponse, source: Optional[str] = None):
+    def save_run(self, run: RunResponse, source: Optional[str] = None, batch_id: Optional[str] = None):
         with self.get_session() as session:
             run_source = source or getattr(run, "source", None) or "user"
+            run_batch_id = batch_id if batch_id is not None else getattr(run, "batch_id", None)
             record = RunRecord(
                 id=run.id,
                 scenario_id=run.scenario_id,
@@ -147,6 +153,7 @@ class DatabaseManager:
                 metrics_json=json.dumps(run.metrics.model_dump()),
                 created_at=run.created_at,
                 source=run_source,
+                batch_id=run_batch_id,
             )
             session.merge(record)
             session.commit()
@@ -159,23 +166,100 @@ class DatabaseManager:
                 return None
             return self._record_to_response(record)
 
-    def list_runs(self, limit: int = 100, offset: int = 0, source: Optional[str] = None) -> List[RunResponse]:
+    def list_runs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        source: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        scenario_id: Optional[str] = None,
+        verdict: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        only_single: bool = False,
+        show_batch: bool = False,
+    ) -> List[RunResponse]:
+        from sqlalchemy import text
         with self.get_session() as session:
             query = select(RunRecord)
             if source:
                 query = query.where(RunRecord.source == source)
-            query = query.order_by(RunRecord.created_at.desc()).offset(offset).limit(limit)
-            records = session.exec(query).all()
-            return [self._record_to_response(r) for r in records]
+            if agent_type and agent_type != "all":
+                query = query.where(RunRecord.agent_type == agent_type)
+            if scenario_id and scenario_id != "all":
+                query = query.where(RunRecord.scenario_id == scenario_id)
+            if batch_id:
+                query = query.where(RunRecord.batch_id == batch_id)
+            elif only_single:
+                query = query.where(RunRecord.batch_id == None)
+            elif show_batch:
+                query = query.where(RunRecord.batch_id != None)
 
-    def list_all_runs(self, source: Optional[str] = None) -> List[RunResponse]:
+            query = query.order_by(RunRecord.created_at.desc(), text("runs.rowid DESC"))
+            records = session.exec(query).all()
+            responses = [self._record_to_response(r) for r in records]
+            if verdict and verdict != "all":
+                responses = [r for r in responses if r.grader_result.verdict == verdict]
+            return responses[offset : offset + limit]
+
+    def list_all_runs(
+        self,
+        source: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        scenario_id: Optional[str] = None,
+        verdict: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        only_single: bool = False,
+        show_batch: bool = False,
+    ) -> List[RunResponse]:
+        from sqlalchemy import text
         with self.get_session() as session:
             query = select(RunRecord)
             if source:
                 query = query.where(RunRecord.source == source)
-            query = query.order_by(RunRecord.created_at.desc())
+            if agent_type and agent_type != "all":
+                query = query.where(RunRecord.agent_type == agent_type)
+            if scenario_id and scenario_id != "all":
+                query = query.where(RunRecord.scenario_id == scenario_id)
+            if batch_id:
+                query = query.where(RunRecord.batch_id == batch_id)
+            elif only_single:
+                query = query.where(RunRecord.batch_id == None)
+            elif show_batch:
+                query = query.where(RunRecord.batch_id != None)
+
+            query = query.order_by(RunRecord.created_at.desc(), text("runs.rowid DESC"))
             records = session.exec(query).all()
-            return [self._record_to_response(r) for r in records]
+            responses = [self._record_to_response(r) for r in records]
+            if verdict and verdict != "all":
+                responses = [r for r in responses if r.grader_result.verdict == verdict]
+            return responses
+
+    def get_matrix_batches(self) -> List[Dict[str, Any]]:
+        """Returns matrix batches with aggregated stats and runs."""
+        from sqlalchemy import text
+        with self.get_session() as session:
+            jobs = session.exec(select(MatrixJobRecord).order_by(MatrixJobRecord.created_at.desc(), text("matrix_jobs.rowid DESC"))).all()
+            batches = []
+            for job in jobs:
+                job_runs = self.list_runs(limit=1000, batch_id=job.id)
+                if not job_runs:
+                    continue
+                passed = sum(1 for r in job_runs if r.grader_result.verdict == "PASSED")
+                total = len(job_runs)
+                rate = (passed / total) if total > 0 else 0.0
+                pct = round(rate * 100)
+                summary = f"Full matrix: {total} runs, {pct}% passed"
+                batches.append({
+                    "batch_id": job.id,
+                    "created_at": job.created_at,
+                    "status": job.status,
+                    "total_runs": total,
+                    "passed_runs": passed,
+                    "pass_rate": rate,
+                    "summary": summary,
+                    "runs": [r.model_dump() for r in job_runs],
+                })
+            return batches
 
     def count_runs(self, source: Optional[str] = None) -> int:
         from sqlmodel import func
@@ -228,6 +312,7 @@ class DatabaseManager:
             metrics=metrics,
             created_at=r.created_at,
             source=getattr(r, "source", "user") or "user",
+            batch_id=getattr(r, "batch_id", None),
         )
 
 

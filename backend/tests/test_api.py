@@ -565,3 +565,95 @@ def test_rapid_fire_duplicate_rejected():
     assert res2.status_code == 429
     assert "duplicate" in res2.json()["detail"].lower()
     assert db_manager.count_runs() == 1
+
+
+def test_deterministic_ordering_newest_first_and_single_filtering():
+    """Verify newest runs are always ordered first, and show=single isolates single runs from batches."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+
+    # Create run 1 (Resilient)
+    r1 = client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "robust",
+        "fault_type": "timeout",
+        "seed": 101,
+    }).json()
+
+    # Create run 2 (Basic)
+    r2 = client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "naive",
+        "fault_type": "timeout",
+        "seed": 102,
+    }).json()
+
+    # List runs - r2 must be first, r1 second
+    runs = client.get("/api/runs").json()
+    assert len(runs) >= 2
+    assert runs[0]["id"] == r2["id"]
+    assert runs[1]["id"] == r1["id"]
+
+    # Now create a matrix batch
+    job_res = client.post("/api/matrix", json={
+        "scenarios": ["bad_deploy"],
+        "agents": ["robust"],
+        "fault_types": ["timeout"],
+        "seeds": [201, 202],
+    })
+    assert job_res.status_code == 200
+
+    # Wait briefly for background execution
+    import time
+    time.sleep(0.5)
+
+    # In show=single mode: ONLY single runs appear, with r2 still on top, r1 second
+    single_runs = client.get("/api/runs?show=single").json()
+    assert len(single_runs) == 2
+    assert single_runs[0]["id"] == r2["id"]
+    assert single_runs[1]["id"] == r1["id"]
+    assert all(r["batch_id"] is None for r in single_runs)
+
+    # In matrix batches endpoint: exactly 1 batch exists
+    batches = client.get("/api/matrix/batches").json()
+    assert len(batches) >= 1
+    assert batches[0]["total_runs"] == 2
+    assert "Full matrix" in batches[0]["summary"]
+
+
+def test_runs_filtering_by_agent_scenario_verdict():
+    """Verify filters for agent, scenario, verdict work accurately."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+
+    # Run 1: robust, bad_deploy -> PASSED
+    client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "robust",
+        "fault_type": "timeout",
+        "seed": 301,
+    })
+
+    # Run 2: naive, bad_deploy -> FAILED
+    client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "naive",
+        "fault_type": "timeout",
+        "seed": 302,
+    })
+
+    # Filter agent=robust
+    robust_runs = client.get("/api/runs?agent=robust").json()
+    assert len(robust_runs) == 1
+    assert robust_runs[0]["agent_type"] == "robust"
+
+    # Filter verdict=PASSED
+    passed_runs = client.get("/api/runs?verdict=PASSED").json()
+    assert len(passed_runs) == 1
+    assert passed_runs[0]["grader_result"]["verdict"] == "PASSED"
+
+    # Filter verdict=FAILED
+    failed_runs = client.get("/api/runs?verdict=FAILED").json()
+    assert len(failed_runs) == 1
+    assert failed_runs[0]["grader_result"]["verdict"] == "FAILED"
+

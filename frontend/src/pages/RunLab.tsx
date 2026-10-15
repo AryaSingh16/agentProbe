@@ -18,6 +18,7 @@ import {
   getScenarioLabel,
   getToolLabel,
 } from '../lib/labels';
+import { HowThisWorks } from '../components/HowThisWorks';
 import {
   AlertCircle,
   AlertTriangle,
@@ -92,7 +93,10 @@ export const RunLab: React.FC = () => {
     if (matrixStatus?.status === 'completed' || matrixStatus?.status === 'failed') {
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
       queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['recent-runs-initial'] });
+      queryClient.invalidateQueries({ queryKey: ['matrix-batches'] });
       queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list-for-report'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
       queryClient.invalidateQueries({ queryKey: ['history'] });
       queryClient.invalidateQueries({ queryKey: ['report-data'] });
@@ -105,7 +109,10 @@ export const RunLab: React.FC = () => {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
       queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['recent-runs-initial'] });
+      queryClient.invalidateQueries({ queryKey: ['matrix-batches'] });
       queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list-for-report'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
       queryClient.invalidateQueries({ queryKey: ['history'] });
       queryClient.invalidateQueries({ queryKey: ['report-data'] });
@@ -192,6 +199,9 @@ export const RunLab: React.FC = () => {
           Configure controlled fault schedules against simulated ops agents. Compare baseline behaviour vs active degradation, prompt injections, and recovery failures.
         </p>
       </div>
+
+      {/* How This Works Helper Text */}
+      <HowThisWorks />
 
       {/* Status & Error Alerts */}
       {statusMessage && (

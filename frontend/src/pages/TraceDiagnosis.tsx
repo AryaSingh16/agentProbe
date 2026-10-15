@@ -55,6 +55,12 @@ export const TraceDiagnosis: React.FC = () => {
   const [compareRunId, setCompareRunId] = useState<string>('');
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false);
 
+  useEffect(() => {
+    if (urlRunId && urlRunId !== selectedRunId) {
+      setSelectedRunId(urlRunId);
+    }
+  }, [urlRunId, selectedRunId]);
+
   // Filters
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [toolFilter, setToolFilter] = useState<string>('all');

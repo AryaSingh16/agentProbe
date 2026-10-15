@@ -54,7 +54,7 @@ class CassetteMetadata(BaseModel):
     interactions: List[Dict[str, Any]] = []
 
 
-def load_cassettes() -> Dict[str, CassetteMetadata]:
+def load_cassettes(include_hand_authored: bool = False) -> Dict[str, CassetteMetadata]:
     cassettes = {}
     if not CASSETTES_DIR.exists():
         return cassettes
@@ -74,6 +74,11 @@ def load_cassettes() -> Dict[str, CassetteMetadata]:
                 if not is_valid:
                     continue
 
+                # Hand-authored cassettes never enter the matrix or Overview aggregates
+                # and cannot be run as recorded language-model runs
+                if not include_hand_authored and meta.provenance != "recorded":
+                    continue
+
                 cassettes[meta.cassette_id] = meta
                 if meta.provenance == "recorded" or f"scenario_{meta.scenario_id}" not in cassettes:
                     cassettes[f"scenario_{meta.scenario_id}"] = meta
@@ -85,11 +90,9 @@ def load_cassettes() -> Dict[str, CassetteMetadata]:
 
 
 def has_cassette(scenario_id: str, cassette_id: Optional[str] = None) -> bool:
-    """Returns True if a valid replay cassette exists for the specified scenario or cassette ID."""
-    cassettes = load_cassettes()
+    """Returns True only if a valid real-model recorded replay cassette exists."""
+    cassettes = load_cassettes(include_hand_authored=False)
     if cassette_id and cassette_id in cassettes:
-        return True
-    if f"scenario_{scenario_id}" in cassettes:
         return True
     if f"recorded_{scenario_id}" in cassettes:
         return True

@@ -95,7 +95,7 @@ def list_scenarios():
 @router.get("/cassettes")
 def list_cassettes():
     """List available LLM cassettes with honest provenance labeling."""
-    cassettes = load_cassettes()
+    cassettes = load_cassettes(include_hand_authored=True)
     unique = {}
     for k, v in cassettes.items():
         unique[v.cassette_id] = v.model_dump()
@@ -143,10 +143,32 @@ def create_run(req: RunCreateRequest):
 def list_runs(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    agent: Optional[str] = Query(default=None),
+    scenario_id: Optional[str] = Query(default=None),
+    verdict: Optional[str] = Query(default=None),
+    batch_id: Optional[str] = Query(default=None),
+    show: Optional[str] = Query(default=None),
     scope: Optional[str] = Query(default=None),
 ):
-    """List stored runs with pagination (newest first)."""
-    return db_manager.list_runs(limit=limit, offset=offset)
+    """List stored runs with pagination, filters, and batch filtering (newest first)."""
+    only_single = (show == "single")
+    show_batch = (show == "batch")
+    return db_manager.list_runs(
+        limit=limit,
+        offset=offset,
+        agent_type=agent,
+        scenario_id=scenario_id,
+        verdict=verdict,
+        batch_id=batch_id,
+        only_single=only_single,
+        show_batch=show_batch,
+    )
+
+
+@router.get("/matrix/batches")
+def get_matrix_batches():
+    """List matrix batches grouped as single rows with aggregates and nested runs."""
+    return db_manager.get_matrix_batches()
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)
@@ -234,19 +256,32 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
             return
 
         active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
-        total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
+        total_runs = 0
+        for ag in req.agents:
+            if ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+                for scen in req.scenarios:
+                    if has_cassette(scen):
+                        total_runs += 1
+            else:
+                total_runs += len(req.scenarios) * len(req.fault_types) * len(active_seeds)
+        total_runs = max(1, total_runs)
         executed_runs: List[RunResponse] = []
 
         for scen in req.scenarios:
             for ag in req.agents:
+                is_llm = ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)")
                 # If agent is recorded LLM and has no cassette for this scenario, skip it (N/A)
-                if ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+                if is_llm:
                     if not has_cassette(scen):
                         logger.info(f"Skipping recorded run for {scen}: no recording.")
                         continue
 
                 for ft in req.fault_types:
                     for seed_val in active_seeds:
+                        # Language-model agent runs only once per recording, never replayed across seeds/faults!
+                        if is_llm and (ft != "none" or seed_val != active_seeds[0]):
+                            continue
+
                         cur_job = db_manager.get_matrix_job(job_id)
                         if not cur_job or cur_job.status == "cancelled":
                             logger.info(f"Matrix job {job_id} was cancelled or cleared; aborting execution.")
@@ -261,7 +296,7 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                         )
                         try:
                             res = run_experiment(run_req)
-                            db_manager.save_run(res, source="user")
+                            db_manager.save_run(res, source="user", batch_id=job_id)
                             executed_runs.append(res)
                         except ValueError as e:
                             if "no recording" in str(e).lower():
@@ -310,8 +345,17 @@ def start_matrix_job(req: MatrixJobRequest, background_tasks: BackgroundTasks):
                 detail=f"A matrix job ({active[0].id}) is already currently running. Please wait for it to complete.",
             )
 
+    from app.llm import has_cassette
     active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
-    total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
+    total_runs = 0
+    for ag in req.agents:
+        if ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+            for scen in req.scenarios:
+                if has_cassette(scen):
+                    total_runs += 1
+        else:
+            total_runs += len(req.scenarios) * len(req.fault_types) * len(active_seeds)
+    total_runs = max(1, total_runs)
 
     # Hard cap of 900 runs
     if total_runs > 900:

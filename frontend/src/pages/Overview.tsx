@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { fetchMetrics, fetchRuns } from '../api';
+import { fetchMetrics, fetchRuns, fetchMatrixBatches } from '../api';
+import { HowThisWorks } from '../components/HowThisWorks';
 import {
   formatRunId,
   getFaultLabel,
@@ -12,7 +13,10 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
+  Filter,
   Flame,
   Info,
   Layers,
@@ -32,6 +36,12 @@ import {
 
 export const Overview: React.FC = () => {
   const [selectedScenario, setSelectedScenario] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<'single' | 'batch' | 'all'>('single');
+  const [viewModeSetByUser, setViewModeSetByUser] = useState<boolean>(false);
+  const [filterAgent, setFilterAgent] = useState<string>('all');
+  const [filterScenario, setFilterScenario] = useState<string>('all');
+  const [filterResult, setFilterResult] = useState<string>('all');
+  const [expandedBatches, setExpandedBatches] = useState<Record<string, boolean>>({});
 
   const { data: metricsData } = useQuery({
     queryKey: ['metrics', selectedScenario],
@@ -40,11 +50,60 @@ export const Overview: React.FC = () => {
     refetchInterval: 5000,
   });
 
+  // Query initial runs to determine if any single tests exist
+  const { data: allRunsData } = useQuery({
+    queryKey: ['recent-runs-initial'],
+    queryFn: () => fetchRuns(20, 0),
+    staleTime: 5000,
+  });
+
+  useEffect(() => {
+    if (!viewModeSetByUser && allRunsData) {
+      const hasSingle = allRunsData.some((r) => !r.batch_id);
+      if (!hasSingle && allRunsData.length > 0) {
+        setViewMode('all');
+      } else if (hasSingle) {
+        setViewMode('single');
+      }
+    }
+  }, [allRunsData, viewModeSetByUser]);
+
   const { data: runs } = useQuery({
-    queryKey: ['recent-runs'],
-    queryFn: () => fetchRuns(10, 0),
+    queryKey: ['recent-runs', viewMode, filterAgent, filterScenario, filterResult],
+    queryFn: () =>
+      fetchRuns(50, 0, {
+        show: viewMode === 'batch' ? undefined : viewMode,
+        agent: filterAgent,
+        scenario_id: filterScenario,
+        verdict: filterResult,
+      }),
     staleTime: 0,
     refetchInterval: 5000,
+  });
+
+  const { data: matrixBatches } = useQuery({
+    queryKey: ['matrix-batches'],
+    queryFn: fetchMatrixBatches,
+    staleTime: 0,
+    refetchInterval: 5000,
+  });
+
+  const toggleBatch = (batchId: string) => {
+    setExpandedBatches((prev) => ({
+      ...prev,
+      [batchId]: !prev[batchId],
+    }));
+  };
+
+  const batchesList = Array.isArray(matrixBatches) ? matrixBatches : [];
+  const filteredBatches = batchesList.filter((batch) => {
+    if (filterAgent === 'all' && filterScenario === 'all' && filterResult === 'all') return true;
+    return (batch.runs || []).some((r) => {
+      if (filterAgent !== 'all' && r.agent_type !== filterAgent) return false;
+      if (filterScenario !== 'all' && r.scenario_id !== filterScenario) return false;
+      if (filterResult !== 'all' && r.grader_result.verdict !== filterResult) return false;
+      return true;
+    });
   });
 
   const aggs = metricsData?.aggregates;
@@ -118,48 +177,6 @@ export const Overview: React.FC = () => {
     }
   };
 
-  // If there are no completed runs, show the clean empty state
-  if (!aggs?.total_runs || aggs.total_runs === 0) {
-    return (
-      <div className="space-y-8">
-        {/* Header Banner */}
-        <div className="border border-indigo-900/40 bg-gradient-to-r from-indigo-950/30 via-slate-900 to-slate-900 rounded-xl p-6 shadow-xl">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-indigo-400 text-xs tracking-wider uppercase mb-1 font-semibold">
-                <Activity className="w-4 h-4" /> Agent Reliability Command Center
-              </div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">System Telemetry & Stress Analytics</h1>
-              <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-                Deterministic ops evaluation under controlled fault injection. Compares baseline resilience against transient degradation and prompt injections.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link
-                to="/lab"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-medium transition shadow-lg shadow-indigo-600/20"
-              >
-                Launch Run Lab <ArrowRight className="w-4 h-4" />
-              </Link>
-            </div>
-          </div>
-        </div>
-
-        {/* Clean Empty State */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-16 text-center flex flex-col items-center justify-center space-y-4">
-          <Activity className="w-12 h-12 text-slate-600 mb-2" />
-          <p className="text-base text-slate-300 font-medium">Run a test to see results.</p>
-          <Link
-            to="/lab"
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold transition shadow-lg shadow-indigo-600/20"
-          >
-            Run full matrix
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-8">
       {/* Header Banner */}
@@ -184,6 +201,25 @@ export const Overview: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* How This Works Helper Text */}
+      <HowThisWorks />
+
+      {(!aggs?.total_runs || aggs.total_runs === 0) && (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-16 text-center flex flex-col items-center justify-center space-y-4">
+          <Activity className="w-12 h-12 text-slate-600 mb-2" />
+          <p className="text-base text-slate-300 font-medium">Run a test to see results.</p>
+          <Link
+            to="/lab"
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm font-semibold transition shadow-lg shadow-indigo-600/20"
+          >
+            Run full matrix
+          </Link>
+        </div>
+      )}
+
+      {aggs && aggs.total_runs > 0 && (
+        <>
 
       {/* Last Run Strip */}
       {metricsData?.last_run && (
@@ -527,10 +563,12 @@ export const Overview: React.FC = () => {
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {/* Recent Runs Table */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
           <div>
             <h2 className="text-base font-semibold text-white flex items-center gap-2">
               <Clock className="w-4 h-4 text-indigo-400" /> Recent Runs
@@ -539,59 +577,341 @@ export const Overview: React.FC = () => {
               Deterministic runs with trace recordings and automated grading assertions.
             </p>
           </div>
-          <Link to="/trace" className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1">
-            View All Traces <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Toggle: Show: Single tests | Matrix batches | All */}
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+              <span className="text-slate-400 font-medium px-2 py-1">Show:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('single');
+                  setViewModeSetByUser(true);
+                }}
+                className={`px-2.5 py-1 rounded font-medium transition ${
+                  viewMode === 'single'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Single tests
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('batch');
+                  setViewModeSetByUser(true);
+                }}
+                className={`px-2.5 py-1 rounded font-medium transition ${
+                  viewMode === 'batch'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Matrix batches
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('all');
+                  setViewModeSetByUser(true);
+                }}
+                className={`px-2.5 py-1 rounded font-medium transition ${
+                  viewMode === 'all'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                All
+              </button>
+            </div>
+
+            <Link
+              to="/trace"
+              className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1"
+            >
+              View All Traces <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </div>
 
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2 mb-4 pt-3 border-t border-slate-800/60">
+          <div className="flex items-center gap-1.5 text-xs text-slate-400">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <span>Filter by:</span>
+          </div>
+
+          <select
+            value={filterAgent}
+            onChange={(e) => setFilterAgent(e.target.value)}
+            aria-label="Filter by agent"
+            className="bg-slate-950 text-slate-200 border border-slate-800 text-xs rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          >
+            <option value="all">All Agents</option>
+            <option value="naive">Basic</option>
+            <option value="robust">Resilient</option>
+            <option value="llm">Language model</option>
+          </select>
+
+          <select
+            value={filterScenario}
+            onChange={(e) => setFilterScenario(e.target.value)}
+            aria-label="Filter by scenario"
+            className="bg-slate-950 text-slate-200 border border-slate-800 text-xs rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          >
+            <option value="all">All Scenarios</option>
+            <option value="bad_deploy">Bad deployment</option>
+            <option value="injected_instruction">Malicious log instruction</option>
+            <option value="unfixable_rollback">Rollback can&apos;t fix it</option>
+            <option value="schema_drift">Undocumented schema drift</option>
+          </select>
+
+          <select
+            value={filterResult}
+            onChange={(e) => setFilterResult(e.target.value)}
+            aria-label="Filter by result"
+            className="bg-slate-950 text-slate-200 border border-slate-800 text-xs rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          >
+            <option value="all">All Results</option>
+            <option value="PASSED">Passed</option>
+            <option value="FAILED">Failed</option>
+          </select>
+
+          {(filterAgent !== 'all' || filterScenario !== 'all' || filterResult !== 'all') && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterAgent('all');
+                setFilterScenario('all');
+                setFilterResult('all');
+              }}
+              className="text-xs text-indigo-400 hover:text-indigo-300 ml-1 underline"
+            >
+              Reset filters
+            </button>
+          )}
+        </div>
+
+        {/* Table content based on viewMode */}
         <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-400">
-                <th className="py-2.5 px-3">Run ID</th>
-                <th className="py-2.5 px-3">Scenario</th>
-                <th className="py-2.5 px-3">Policy</th>
-                <th className="py-2.5 px-3">Verdict</th>
-                <th className="py-2.5 px-3">Faults recovered</th>
-                <th className="py-2.5 px-3">Tool calls</th>
-                <th className="py-2.5 px-3">Duration</th>
-                <th className="py-2.5 px-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60">
-              {runs && runs.length > 0 ? (
-                runs.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-800/30 transition">
-                    <td className="py-2.5 px-3 text-indigo-300 font-medium">{formatRunId(r.id)}</td>
-                    <td className="py-2.5 px-3 text-slate-200">{getScenarioLabel(r.scenario_id)}</td>
-                    <td className="py-2.5 px-3 text-slate-300">{getPolicyLabel(r.agent_type)}</td>
-                    <td className="py-2.5 px-3">{getVerdictBadge(r.grader_result.verdict)}</td>
-                    <td className="py-2.5 px-3 text-slate-400">
-                      {r.grader_result.faults_encountered > 0
-                        ? `${r.grader_result.faults_recovered} of ${r.grader_result.faults_encountered}`
-                        : '0 faults'}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-300">{r.grader_result.tool_calls}</td>
-                    <td className="py-2.5 px-3 text-slate-400">{r.metrics.execution_time_ms} ms</td>
-                    <td className="py-2.5 px-3 text-right">
-                      <Link
-                        to={`/trace?runId=${r.id}`}
-                        className="text-indigo-400 hover:text-indigo-300 hover:underline text-xs font-medium"
-                      >
-                        Inspect trace
-                      </Link>
+          {viewMode === 'batch' ? (
+            /* Matrix batches view */
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400">
+                  <th className="py-2.5 px-3 w-8"></th>
+                  <th className="py-2.5 px-3">Batch ID</th>
+                  <th className="py-2.5 px-3">Summary</th>
+                  <th className="py-2.5 px-3">Status</th>
+                  <th className="py-2.5 px-3">Total runs</th>
+                  <th className="py-2.5 px-3">Pass rate</th>
+                  <th className="py-2.5 px-3 text-right">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {filteredBatches.length > 0 ? (
+                  filteredBatches.map((batch) => {
+                    const isExpanded = !!expandedBatches[batch.batch_id];
+                    return (
+                      <React.Fragment key={batch.batch_id}>
+                        <tr
+                          onClick={() => toggleBatch(batch.batch_id)}
+                          className="hover:bg-slate-800/30 transition cursor-pointer"
+                        >
+                          <td className="py-2.5 px-3 text-slate-400">
+                            {isExpanded ? (
+                              <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-indigo-300 font-medium">
+                            {formatRunId(batch.batch_id)}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-200 font-medium">
+                            {batch.summary}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-950/80 text-indigo-300 border border-indigo-700/60 uppercase">
+                              {batch.status}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-300">{batch.total_runs} runs</td>
+                          <td className="py-2.5 px-3">
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                batch.pass_rate >= 0.8
+                                  ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700'
+                                  : batch.pass_rate >= 0.4
+                                  ? 'bg-amber-900/60 text-amber-300 border border-amber-700'
+                                  : 'bg-rose-900/60 text-rose-300 border border-rose-700'
+                              }`}
+                            >
+                              {Math.round(batch.pass_rate * 100)}%
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <span className="text-indigo-400 hover:text-indigo-300 text-xs font-medium">
+                              {isExpanded ? 'Hide runs' : 'Show runs'}
+                            </span>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="bg-slate-950/60">
+                            <td colSpan={7} className="p-3">
+                              <div className="rounded-lg border border-slate-800 overflow-hidden bg-slate-900/60">
+                                <table className="w-full text-xs text-left border-collapse">
+                                  <thead>
+                                    <tr className="border-b border-slate-800 text-slate-400 bg-slate-950/50">
+                                      <th className="py-2 px-3">Run ID</th>
+                                      <th className="py-2 px-3">Scenario</th>
+                                      <th className="py-2 px-3">Policy</th>
+                                      <th className="py-2 px-3">Verdict</th>
+                                      <th className="py-2 px-3">Faults recovered</th>
+                                      <th className="py-2 px-3">Tool calls</th>
+                                      <th className="py-2 px-3 text-right">Action</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-800/40">
+                                    {(batch.runs || []).map((r) => (
+                                      <tr key={r.id} className="hover:bg-slate-800/20 transition">
+                                        <td className="py-2 px-3 text-indigo-300 font-medium">
+                                          {formatRunId(r.id)}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-200">
+                                          {getScenarioLabel(r.scenario_id)}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-300">
+                                          {getPolicyLabel(r.agent_type)}
+                                        </td>
+                                        <td className="py-2 px-3">
+                                          {getVerdictBadge(r.grader_result.verdict)}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-400">
+                                          {r.grader_result.faults_encountered > 0
+                                            ? `${r.grader_result.faults_recovered} of ${r.grader_result.faults_encountered}`
+                                            : '0 faults'}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-300">
+                                          {r.grader_result.tool_calls}
+                                        </td>
+                                        <td className="py-2 px-3 text-right">
+                                          <Link
+                                            to={`/trace?runId=${r.id}`}
+                                            className="text-indigo-400 hover:text-indigo-300 hover:underline text-xs font-medium"
+                                          >
+                                            Inspect trace
+                                          </Link>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-400">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Clock className="w-8 h-8 text-slate-600" />
+                        <span className="font-medium text-slate-300">No runs yet</span>
+                        <span className="text-xs text-slate-500">
+                          No matrix evaluation batches recorded. Launch a Full Matrix in Run Lab.
+                        </span>
+                      </div>
                     </td>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={8} className="py-6 text-center text-slate-500">
-                    No runs recorded yet. Head over to the Run Lab to launch an experiment.
-                  </td>
+                )}
+              </tbody>
+            </table>
+          ) : (
+            /* Single tests view OR All view */
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400">
+                  <th className="py-2.5 px-3">Run ID</th>
+                  {viewMode === 'all' && <th className="py-2.5 px-3">Type</th>}
+                  <th className="py-2.5 px-3">Scenario</th>
+                  <th className="py-2.5 px-3">Policy</th>
+                  <th className="py-2.5 px-3">Verdict</th>
+                  <th className="py-2.5 px-3">Faults recovered</th>
+                  <th className="py-2.5 px-3">Tool calls</th>
+                  <th className="py-2.5 px-3">Duration</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {runs && runs.length > 0 ? (
+                  runs.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-800/30 transition">
+                      <td className="py-2.5 px-3 text-indigo-300 font-medium">
+                        {formatRunId(r.id)}
+                      </td>
+                      {viewMode === 'all' && (
+                        <td className="py-2.5 px-3">
+                          {r.batch_id ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-950/70 text-purple-300 border border-purple-800/60">
+                              Matrix batch
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-950/70 text-indigo-300 border border-indigo-800/60">
+                              Single test
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td className="py-2.5 px-3 text-slate-200">
+                        {getScenarioLabel(r.scenario_id)}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300">
+                        {getPolicyLabel(r.agent_type)}
+                      </td>
+                      <td className="py-2.5 px-3">{getVerdictBadge(r.grader_result.verdict)}</td>
+                      <td className="py-2.5 px-3 text-slate-400">
+                        {r.grader_result.faults_encountered > 0
+                          ? `${r.grader_result.faults_recovered} of ${r.grader_result.faults_encountered}`
+                          : '0 faults'}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300">{r.grader_result.tool_calls}</td>
+                      <td className="py-2.5 px-3 text-slate-400">
+                        {r.metrics.execution_time_ms} ms
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        <Link
+                          to={`/trace?runId=${r.id}`}
+                          className="text-indigo-400 hover:text-indigo-300 hover:underline text-xs font-medium"
+                        >
+                          Inspect trace
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td
+                      colSpan={viewMode === 'all' ? 9 : 8}
+                      className="py-8 text-center text-slate-400"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Clock className="w-8 h-8 text-slate-600" />
+                        <span className="font-medium text-slate-300">No runs yet</span>
+                        <span className="text-xs text-slate-500">
+                          {viewMode === 'single'
+                            ? 'No single test runs recorded. Launch a test in Run Lab.'
+                            : 'Head over to the Run Lab to launch an experiment.'}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
