@@ -286,7 +286,7 @@ def generate_structured_report(runs: List[RunResponse], scope_name: str = "Curre
             "total_runs": 0,
             "verdict": "PASSED",
             "verdict_title": "No Runs Recorded",
-            "verdict_rule": "Execute an experiment or load demo data to view automated reliability analysis.",
+            "verdict_rule": "Execute an experiment in the Run Lab to view automated reliability analysis.",
             "tiles": [
                 {"label": "Task success", "value": "0/0 (0.0%)", "raw": "0 of 0", "rate": 0.0},
                 {"label": "Fault recovery", "value": "0/0 (0.0%)", "raw": "0 of 0", "rate": 0.0},

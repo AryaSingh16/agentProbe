@@ -5,20 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.api import router, ensure_coverage_runs
+from app.api import router
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Seeding never runs if the user cleared history (demo_seed_declined=true)
-    try:
-        from app.db import db_manager
-        if db_manager.get_setting("demo_seed_declined") != "true" and db_manager.count_runs() == 0:
-            ensure_coverage_runs()
-    except Exception as e:
-        logger.warning(f"Startup coverage seeding error: {e}")
+    # Clean startup: never auto-seeds runs
     yield
 
 

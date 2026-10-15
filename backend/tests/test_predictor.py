@@ -106,12 +106,14 @@ def test_leakage_safe_split_holds():
 
 
 def test_generate_simulator_runs_endpoint():
+    from app.db import db_manager
+    count_before = db_manager.count_runs()
     res = client.post("/api/simulator/generate?count=6")
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"
     assert data["generated_count"] == 6
-    assert data["total_runs_in_db"] >= 6
+    assert db_manager.count_runs() == count_before
 
 
 def test_predictor_predictions_differ_across_fault_types():

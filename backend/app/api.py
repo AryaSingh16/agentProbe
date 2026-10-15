@@ -7,10 +7,13 @@ import datetime
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
+
+from sqlmodel import select
 
 from app.db import MatrixJobRecord, db_manager
 from app.diagnosis import DiagnosisEngine
@@ -99,13 +102,37 @@ def list_cassettes():
     return list(unique.values())
 
 
+_recent_inserts: Dict[str, float] = {}
+
+
 @router.post("/runs", response_model=RunResponse)
 def create_run(req: RunCreateRequest):
     """Execute a single deterministic experiment and persist results as a user run."""
+    # If agent is recorded LLM, verify that cassette exists
+    if req.agent_type in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+        from app.llm import has_cassette
+        if not has_cassette(req.scenario_id, getattr(req, "cassette_id", None)):
+            raise HTTPException(status_code=400, detail="no recording")
+
+    # Reject duplicate rapid-fire inserts (identical request within 1.0 second)
+    now = time.time()
+    dedup_key = f"{req.scenario_id}:{req.agent_type}:{req.fault_type}:{req.fault_intensity}:{req.seed}"
+    last_time = _recent_inserts.get(dedup_key)
+    if last_time and (now - last_time) < 1.0:
+        raise HTTPException(
+            status_code=429,
+            detail="Duplicate rapid-fire run request rejected (<1.0s)."
+        )
+
     try:
         run_res = run_experiment(req)
         db_manager.save_run(run_res, source="user")
+        _recent_inserts[dedup_key] = now
         return run_res
+    except ValueError as e:
+        if "no recording" in str(e).lower():
+            raise HTTPException(status_code=400, detail="no recording")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error executing run: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
@@ -118,13 +145,8 @@ def list_runs(
     offset: int = Query(default=0, ge=0),
     scope: Optional[str] = Query(default=None),
 ):
-    """List stored runs with pagination (newest first), optionally filtered by scope ('user' | 'demo_seed')."""
-    source_filter = None
-    if scope == "user":
-        source_filter = "user"
-    elif scope == "demo_seed":
-        source_filter = "demo_seed"
-    return db_manager.list_runs(limit=limit, offset=offset, source=source_filter)
+    """List stored runs with pagination (newest first)."""
+    return db_manager.list_runs(limit=limit, offset=offset)
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)
@@ -136,102 +158,31 @@ def get_run(run_id: str):
     return run
 
 
-def ensure_coverage_runs(force: bool = False):
-    """
-    Ensures that the reliability matrix has coverage across empty_response and
-    offline replay cassette runs for llm across fault types.
-    Saves runs with source='demo_seed'.
-    Skipped if demo_seed_declined is true and not force.
-    """
-    if not force and db_manager.get_setting("demo_seed_declined") == "true":
-        return
-
-    runs = db_manager.list_all_runs()
-    scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
-    all_faults = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
-
-    # Seed empty_response if missing or under-represented (< 6 runs)
-    empty_runs = [r for r in runs if r.fault_schedule and r.fault_schedule[0].type == "empty_response"]
-    if len(empty_runs) < 6:
-        for scen in scenarios:
-            for ag in ["naive", "robust"]:
-                try:
-                    res = run_experiment(RunCreateRequest(
-                        scenario_id=scen,
-                        agent_type=ag,
-                        fault_type="empty_response",
-                        fault_intensity=1,
-                        seed=42,
-                    ))
-                    db_manager.save_run(res, source="demo_seed")
-                except Exception as e:
-                    logger.warning(f"Failed to seed empty_response run: {e}")
-
-    # Seed llm replay runs if fewer than 10
-    llm_runs = [r for r in runs if DeterministicGrader.normalize_agent_name(r.agent_type) == "llm"]
-    if len(llm_runs) < 10:
-        for scen in scenarios:
-            for ft in all_faults:
-                try:
-                    res = run_experiment(RunCreateRequest(
-                        scenario_id=scen,
-                        agent_type="llm",
-                        fault_type=None if ft == "none" else ft,
-                        fault_intensity=0 if ft == "none" else 1,
-                        seed=42,
-                    ))
-                    db_manager.save_run(res, source="demo_seed")
-                except Exception as e:
-                    logger.warning(f"Failed to seed llm replay run: {e}")
-
-
-@router.post("/demo/seed")
-def seed_demo_data():
-    """Explicitly loads demo coverage runs when requested by user and resets demo_seed_declined flag."""
-    db_manager.set_setting("demo_seed_declined", "false")
-    ensure_coverage_runs(force=True)
-    return {
-        "status": "ok",
-        "message": "Demo data loaded successfully.",
-        "total_runs": len(db_manager.list_all_runs()),
-    }
-
-
 @router.get("/metrics")
 def get_metrics(
     scenario_id: Optional[str] = None,
-    scope: str = Query(default="all"),  # 'all' | 'user' | 'demo_seed'
+    scope: str = Query(default="all"),
 ):
     """
     Calculate aggregate KPIs and reliability matrix heatmap across stored runs.
     Uses write-invalidated caching (version-keyed) for instant O(1) response.
     """
-    cache_key = f"{scenario_id or 'all'}:{scope}"
+    cache_key = f"{scenario_id or 'all'}"
     if cache_key in _metrics_cache and _metrics_cache[cache_key][0] == db_manager.data_version:
         return _metrics_cache[cache_key][1]
 
     all_runs = db_manager.list_all_runs()
-    user_runs = [r for r in all_runs if r.source == "user"]
-    demo_runs = [r for r in all_runs if r.source == "demo_seed"]
-
-    if scope == "user":
-        target_runs = user_runs
-    elif scope == "demo_seed":
-        target_runs = demo_runs
-    else:
-        target_runs = all_runs
 
     # Filter by scenario_id if specified
-    filtered_runs = [r for r in target_runs if r.scenario_id == scenario_id] if (scenario_id and scenario_id != "all") else target_runs
+    filtered_runs = [r for r in all_runs if r.scenario_id == scenario_id] if (scenario_id and scenario_id != "all") else all_runs
 
     analysis = DeterministicGrader.compute_dataset_analysis([r.model_dump() for r in filtered_runs])
 
-    # Compute last run strip for target_runs (or all runs if target is empty)
+    # Compute last run strip for all runs
     last_run_info = None
-    runs_for_last = target_runs if target_runs else all_runs
-    if runs_for_last:
-        latest = runs_for_last[0]
-        prior_runs = runs_for_last[1:]
+    if all_runs:
+        latest = all_runs[0]
+        prior_runs = all_runs[1:]
         curr_rate = analysis["aggregates"].get("success_rate", 0.0) or 0.0
         if prior_runs:
             prior_filtered = [r for r in prior_runs if r.scenario_id == scenario_id] if (scenario_id and scenario_id != "all") else prior_runs
@@ -265,9 +216,6 @@ def get_metrics(
         "baseline_vs_faulted": analysis["baseline_vs_faulted"],
         "unwinnable_scenarios": ["unfixable_rollback"],
         "selected_scenario": scenario_id or "all",
-        "selected_scope": scope,
-        "user_runs_count": len(user_runs),
-        "demo_runs_count": len(demo_runs),
         "last_run": last_run_info,
     }
 
@@ -279,6 +227,7 @@ def get_metrics(
 def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
     """Worker task executing matrix experiments synchronously."""
     from app.stats import format_rate_with_n, wilson_score_interval
+    from app.llm import has_cassette
     try:
         job = db_manager.get_matrix_job(job_id)
         if not job:
@@ -290,6 +239,12 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
 
         for scen in req.scenarios:
             for ag in req.agents:
+                # If agent is recorded LLM and has no cassette for this scenario, skip it (N/A)
+                if ag in ("llm", "llm-replay", "llm-recorded", "llm (recorded)"):
+                    if not has_cassette(scen):
+                        logger.info(f"Skipping recorded run for {scen}: no recording.")
+                        continue
+
                 for ft in req.fault_types:
                     for seed_val in active_seeds:
                         cur_job = db_manager.get_matrix_job(job_id)
@@ -304,9 +259,14 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
                             fault_intensity=f_intensity,
                             seed=seed_val,
                         )
-                        res = run_experiment(run_req)
-                        db_manager.save_run(res, source="user")
-                        executed_runs.append(res)
+                        try:
+                            res = run_experiment(run_req)
+                            db_manager.save_run(res, source="user")
+                            executed_runs.append(res)
+                        except ValueError as e:
+                            if "no recording" in str(e).lower():
+                                continue
+                            raise
 
                         if len(executed_runs) % 20 == 0:
                             job.results_json = json.dumps({
@@ -320,7 +280,7 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
         job.status = "completed"
         job.completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         job.results_json = json.dumps({
-            "total_runs": total_runs,
+            "total_runs": len(executed_runs),
             "completed_runs": len(executed_runs),
             "heatmap": analysis["matrix"],
             "heatmap_details": analysis["matrix_details"],
@@ -341,6 +301,25 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
 @router.post("/matrix")
 def start_matrix_job(req: MatrixJobRequest, background_tasks: BackgroundTasks):
     """Start an evaluation matrix across policies, scenarios, and fault types."""
+    # Check if a matrix job is currently pending or running
+    with db_manager.get_session() as session:
+        active = session.exec(select(MatrixJobRecord).where(MatrixJobRecord.status.in_(["pending", "running"]))).all()
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A matrix job ({active[0].id}) is already currently running. Please wait for it to complete.",
+            )
+
+    active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
+    total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
+
+    # Hard cap of 900 runs
+    if total_runs > 900:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Matrix total runs ({total_runs}) exceeds hard cap of 900 runs.",
+        )
+
     job_id = f"job_{uuid.uuid4().hex[:10]}"
     job_record = MatrixJobRecord(
         id=job_id,
@@ -351,8 +330,6 @@ def start_matrix_job(req: MatrixJobRequest, background_tasks: BackgroundTasks):
     db_manager.save_matrix_job(job_record)
     background_tasks.add_task(_execute_matrix_job, job_id, req)
 
-    active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
-    total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
     return {
         "job_id": job_id,
         "status": "running",
@@ -451,8 +428,7 @@ def predict_risk(req: PredictorPredictRequest):
 @router.post("/simulator/generate")
 def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
     """
-    Executes real seeded simulator runs across varied scenarios, policies, and faults,
-    labelled as simulator-generated and persisted in the database.
+    Executes real seeded simulator runs in memory without database persistence.
     """
     scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
     agents = ["naive", "robust"]
@@ -477,16 +453,13 @@ def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
             seed=seed,
         )
         res = run_experiment(req)
-        db_manager.save_run(res, source="demo_seed")
         generated.append(res.id)
         idx += 1
 
-    total_runs = len(db_manager.list_runs(limit=10000))
     return {
         "status": "ok",
         "generated_count": len(generated),
-        "total_runs_in_db": total_runs,
-        "message": f"Successfully generated {len(generated)} real simulator runs (labelled simulator-generated).",
+        "message": f"Successfully executed {len(generated)} simulator runs in memory (no DB persistence).",
     }
 
 
@@ -503,12 +476,6 @@ def get_report(
     elif scope == "latest":
         target_runs = [all_runs[0]] if all_runs else []
         scope_title = "Latest run"
-    elif scope == "user":
-        target_runs = [r for r in all_runs if r.source == "user"]
-        scope_title = "My runs"
-    elif scope == "demo_seed":
-        target_runs = [r for r in all_runs if r.source == "demo_seed"]
-        scope_title = "Demo data"
     else:
         target_runs = all_runs
         scope_title = "Current scope"
@@ -527,10 +494,6 @@ def export_runs_json(
         runs = [r for r in all_runs if r.id == run_id]
     elif scope == "latest":
         runs = [all_runs[0]] if all_runs else []
-    elif scope == "user":
-        runs = [r for r in all_runs if r.source == "user"]
-    elif scope == "demo_seed":
-        runs = [r for r in all_runs if r.source == "demo_seed"]
     else:
         runs = all_runs
 
@@ -559,10 +522,6 @@ def export_report_md(
         runs = [r for r in all_runs if r.id == run_id]
     elif scope == "latest":
         runs = [all_runs[0]] if all_runs else []
-    elif scope == "user":
-        runs = [r for r in all_runs if r.source == "user"]
-    elif scope == "demo_seed":
-        runs = [r for r in all_runs if r.source == "demo_seed"]
     else:
         runs = all_runs
 
@@ -585,10 +544,6 @@ def export_finetune_jsonl(
         runs = [r for r in all_runs if r.id == run_id]
     elif scope == "latest":
         runs = [all_runs[0]] if all_runs else []
-    elif scope == "user":
-        runs = [r for r in all_runs if r.source == "user"]
-    elif scope == "demo_seed":
-        runs = [r for r in all_runs if r.source == "demo_seed"]
     else:
         runs = all_runs
     jsonl_content = generate_finetune_jsonl(runs)
@@ -608,5 +563,6 @@ def clear_history(confirm: bool = Query(default=False)):
             detail="Confirmation required to clear history. Pass ?confirm=true query parameter.",
         )
     _metrics_cache.clear()
+    _recent_inserts.clear()
     db_manager.clear_runs()
     return {"status": "ok", "message": "All experiment history cleared successfully."}

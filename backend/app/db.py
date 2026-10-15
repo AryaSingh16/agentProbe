@@ -197,7 +197,6 @@ class DatabaseManager:
                 else:
                     session.delete(job)
             session.commit()
-            self.set_setting("demo_seed_declined", "true")
             self.data_version += 1
 
     def save_matrix_job(self, job: MatrixJobRecord):

@@ -64,8 +64,17 @@ def load_cassettes() -> Dict[str, CassetteMetadata]:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 meta = CassetteMetadata(**data)
+                # Ensure cassette has valid interactions and is not an error/429 dump
+                is_valid = True
+                for interaction in meta.interactions:
+                    resp = interaction.get("response", "")
+                    if "LLM_ERROR" in resp or "HTTP_429" in resp:
+                        is_valid = False
+                        break
+                if not is_valid:
+                    continue
+
                 cassettes[meta.cassette_id] = meta
-                # Prioritize recorded cassettes for scenario matching
                 if meta.provenance == "recorded" or f"scenario_{meta.scenario_id}" not in cassettes:
                     cassettes[f"scenario_{meta.scenario_id}"] = meta
                 if meta.provenance == "recorded":
@@ -73,6 +82,18 @@ def load_cassettes() -> Dict[str, CassetteMetadata]:
         except Exception as e:
             logger.warning(f"Failed to load cassette {filepath.name}: {e}")
     return cassettes
+
+
+def has_cassette(scenario_id: str, cassette_id: Optional[str] = None) -> bool:
+    """Returns True if a valid replay cassette exists for the specified scenario or cassette ID."""
+    cassettes = load_cassettes()
+    if cassette_id and cassette_id in cassettes:
+        return True
+    if f"scenario_{scenario_id}" in cassettes:
+        return True
+    if f"recorded_{scenario_id}" in cassettes:
+        return True
+    return False
 
 
 class LLMAgent(BaseAgent):
@@ -149,49 +170,7 @@ Respond ONLY with valid JSON in this schema:
             raw_response = interaction.get("response", "{}")
             return self._parse_llm_json(raw_response)
 
-        # Fallback heuristic replay if no exact cassette matched
-        return self._heuristic_replay(history)
-
-    def _heuristic_replay(self, history: List[Dict[str, Any]]) -> AgentAction:
-        called = [h.get("tool") for h in history]
-        if "get_health" not in called:
-            return AgentAction(
-                tool="get_health",
-                args={"service": self.scenario.service_name},
-                thought="[Replay fallback] Checking health telemetry.",
-            )
-        if "get_errors" not in called:
-            return AgentAction(
-                tool="get_errors",
-                args={"service": self.scenario.service_name},
-                thought="[Replay fallback] Inspecting error logs.",
-            )
-        if self.scenario.scenario_id == "healthy_service":
-            return AgentAction(
-                tool="finish",
-                thought="[Replay fallback] Service confirmed healthy.",
-                is_finish=True,
-                finish_reason="Service healthy",
-            )
-        if "request_rollback" not in called:
-            token = self.scenario.auth_token or "NO_TOKEN"
-            return AgentAction(
-                tool="request_rollback",
-                args={"service": self.scenario.service_name, "approval_token": token},
-                thought="[Replay fallback] Executing rollback.",
-            )
-        if "verify_recovery" not in called:
-            return AgentAction(
-                tool="verify_recovery",
-                args={"service": self.scenario.service_name},
-                thought="[Replay fallback] Verifying recovery.",
-            )
-        return AgentAction(
-            tool="finish",
-            thought="[Replay fallback] Remediation cycle completed.",
-            is_finish=True,
-            finish_reason="Completed",
-        )
+        raise RuntimeError(f"no recording for scenario {self.scenario.scenario_id}")
 
     def _live_action(self, history: List[Dict[str, Any]]) -> AgentAction:
         global LIVE_CALLS_MADE

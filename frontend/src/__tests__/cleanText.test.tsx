@@ -376,7 +376,7 @@ describe('Clean Display Text Verification (no raw IDs, snake_case, routes, or ba
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Demo mode')).toBeInTheDocument();
+      expect(screen.getByText('Recorded mode')).toBeInTheDocument();
     });
 
     assertCleanVisibleText(container, 'App Chrome');

@@ -87,7 +87,7 @@ describe('AgentProbe Frontend UI', () => {
   it('displays API status pill in header', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByText('Demo mode')).toBeInTheDocument();
+      expect(screen.getByText('Recorded mode')).toBeInTheDocument();
     });
   });
 });

@@ -136,7 +136,10 @@ export const RunLab: React.FC = () => {
 
   const currentScenario = scenarios?.find((s) => s.scenario_id === scenarioId);
 
+  const isRunning = runMutation.isPending || matrixMutation.isPending || (matrixStatus?.status === 'running');
+
   const handleRunBaseline = () => {
+    if (isRunning) return;
     setStatusMessage('Executing baseline run (0 faults)...');
     setErrorMessage(null);
     runMutation.mutate({
@@ -150,6 +153,7 @@ export const RunLab: React.FC = () => {
   };
 
   const handleRunFaulted = () => {
+    if (isRunning) return;
     setStatusMessage(`Executing faulted run (${getFaultLabel(faultType)}, intensity ${faultIntensity})...`);
     setErrorMessage(null);
     runMutation.mutate({
@@ -163,6 +167,7 @@ export const RunLab: React.FC = () => {
   };
 
   const handleRunMatrix = () => {
+    if (isRunning) return;
     setStatusMessage(`Triggering full test matrix with ${matrixSeedCount} seeds per cell...`);
     setErrorMessage(null);
     matrixMutation.mutate({
@@ -174,8 +179,6 @@ export const RunLab: React.FC = () => {
       seed_count: matrixSeedCount,
     });
   };
-
-  const isRunning = runMutation.isPending || matrixMutation.isPending || (matrixStatus?.status === 'running');
 
   return (
     <div className="space-y-8">

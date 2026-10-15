@@ -135,6 +135,7 @@ class RunCreateRequest(BaseModel):
     fault_type: Optional[str] = None
     fault_intensity: int = Field(default=0, ge=0, le=5)
     seed: int = 42
+    cassette_id: Optional[str] = None
     custom_fault_schedule: Optional[List[FaultSpec]] = None
 
 

@@ -288,14 +288,14 @@ def test_matrix_per_scenario_cells_not_all_identical():
         "agent_type": "robust",
         "fault_type": None,
         "fault_intensity": 0,
-        "seed": 42,
+        "seed": 142,
     })
     client.post("/api/runs", json={
         "scenario_id": "unfixable_rollback",
         "agent_type": "robust",
         "fault_type": None,
         "fault_intensity": 0,
-        "seed": 42,
+        "seed": 142,
     })
 
     # Query metrics
@@ -410,13 +410,13 @@ def test_report_differs_per_run():
     res_a = client.post("/api/runs", json={
         "scenario_id": "bad_deploy",
         "agent_type": "robust",
-        "seed": 42,
+        "seed": 242,
     }).json()
 
     res_b = client.post("/api/runs", json={
         "scenario_id": "rollback_denied",
         "agent_type": "naive",
-        "seed": 42,
+        "seed": 243,
     }).json()
 
     rep_a = client.get(f"/api/report?run_id={res_a['id']}").json()
@@ -429,28 +429,52 @@ def test_report_differs_per_run():
     assert rep_a["findings"] != rep_b["findings"]
 
 
-def test_scope_changes_numbers_and_my_runs_excludes_demo_seeds():
-    """Scope changes the numbers; 'My runs' excludes demo seeds."""
+def test_read_and_simulated_endpoints_create_zero_runs():
+    """GET metrics, report, runs, predictor, and simulated check never create or persist runs."""
     from app.db import db_manager
     client.delete("/api/history?confirm=true")
+    assert db_manager.count_runs() == 0
 
-    client.post("/api/runs", json={
-        "scenario_id": "healthy_service",
+    # GET metrics
+    res = client.get("/api/metrics")
+    assert res.status_code == 200
+    assert db_manager.count_runs() == 0
+
+    # GET report
+    res = client.get("/api/report")
+    assert res.status_code == 200
+    assert db_manager.count_runs() == 0
+
+    # GET runs
+    res = client.get("/api/runs")
+    assert res.status_code == 200
+    assert db_manager.count_runs() == 0
+
+    # POST simulator/generate (live simulated check)
+    res = client.post("/api/simulator/generate", json={
+        "scenario_id": "bad_deploy",
         "agent_type": "naive",
-        "seed": 42,
+        "fault_type": "timeout",
+        "fault_intensity": 2,
+        "count": 5,
     })
+    assert res.status_code == 200
+    assert db_manager.count_runs() == 0
 
-    client.post("/api/demo/seed")
-
-    metrics_user = client.get("/api/metrics?scope=user").json()
-    metrics_demo = client.get("/api/metrics?scope=demo_seed").json()
-    metrics_all = client.get("/api/metrics?scope=all").json()
-
-    assert metrics_user["aggregates"]["total_runs"] == 1
-    assert metrics_user["user_runs_count"] == 1
-    assert metrics_demo["aggregates"]["total_runs"] > 1
-    assert metrics_all["aggregates"]["total_runs"] == metrics_user["aggregates"]["total_runs"] + metrics_demo["aggregates"]["total_runs"]
-    assert metrics_user["aggregates"]["total_runs"] != metrics_all["aggregates"]["total_runs"]
+    # POST predictor/predict
+    res = client.post("/api/predictor/predict", json={
+        "scenario_id": "bad_deploy",
+        "fault_type": "timeout",
+        "fault_intensity": 2,
+        "policy": {
+            "max_retries": 1,
+            "validate_schema": True,
+            "treat_output_as_data": False,
+            "verify_postconditions": True,
+        },
+    })
+    assert res.status_code == 200
+    assert db_manager.count_runs() == 0
 
 
 def test_clear_restart_stays_empty():
@@ -460,15 +484,14 @@ def test_clear_restart_stays_empty():
     import asyncio
 
     client.delete("/api/history?confirm=true")
-    assert len(db_manager.list_all_runs()) == 0
-    assert db_manager.get_setting("demo_seed_declined") == "true"
+    assert db_manager.count_runs() == 0
 
     async def simulate_startup():
         async with lifespan(app):
             pass
 
     asyncio.run(simulate_startup())
-    assert len(db_manager.list_all_runs()) == 0
+    assert db_manager.count_runs() == 0
 
 
 def test_metrics_reflect_new_run_immediately_and_delta():
@@ -476,16 +499,16 @@ def test_metrics_reflect_new_run_immediately_and_delta():
     from app.db import db_manager
     client.delete("/api/history?confirm=true")
 
-    m0 = client.get("/api/metrics?scope=user").json()
+    m0 = client.get("/api/metrics").json()
     assert m0["aggregates"]["total_runs"] == 0
 
     r1 = client.post("/api/runs", json={
         "scenario_id": "unfixable_rollback",
         "agent_type": "naive",
-        "seed": 42,
+        "seed": 341,
     }).json()
 
-    m1 = client.get("/api/metrics?scope=user").json()
+    m1 = client.get("/api/metrics").json()
     assert m1["aggregates"]["total_runs"] == 1
     assert m1["last_run"]["id"] == r1["id"]
     assert "Initial run:" in m1["last_run"]["delta_text"]
@@ -493,26 +516,52 @@ def test_metrics_reflect_new_run_immediately_and_delta():
     r2 = client.post("/api/runs", json={
         "scenario_id": "healthy_service",
         "agent_type": "naive",
-        "seed": 42,
+        "seed": 342,
     }).json()
 
-    m2 = client.get("/api/metrics?scope=user").json()
+    m2 = client.get("/api/metrics").json()
     assert m2["aggregates"]["total_runs"] == 2
     assert m2["last_run"]["id"] == r2["id"]
     assert "Success 0.0% -> 50.0%" in m2["last_run"]["delta_text"]
 
 
-def test_seed_demo_data_button_populates_db_and_allows_seeding_after_clear():
-    """Explicitly clicking seed demo data populates DB and resets demo_seed_declined."""
+def test_llm_without_cassette_rejected_with_no_recording():
+    """Replaying LLM with no cassette raises HTTP 400 'no recording' and does not create run."""
     from app.db import db_manager
     client.delete("/api/history?confirm=true")
-    assert db_manager.get_setting("demo_seed_declined") == "true"
-    assert db_manager.count_runs() == 0
+    initial_count = db_manager.count_runs()
 
-    res = client.post("/api/demo/seed")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "ok"
-    assert data["total_runs"] > 0
-    assert db_manager.count_runs() > 0
-    assert db_manager.get_setting("demo_seed_declined") == "false"
+    res = client.post("/api/runs", json={
+        "scenario_id": "healthy_service",
+        "agent_type": "llm",
+        "seed": 42,
+    })
+    assert res.status_code == 400
+    assert "no recording" in res.json()["detail"].lower()
+    assert db_manager.count_runs() == initial_count
+
+
+def test_rapid_fire_duplicate_rejected():
+    """Duplicate rapid-fire POST /runs requests (<1.0s) are rejected."""
+    from app.db import db_manager
+    client.delete("/api/history?confirm=true")
+
+    res1 = client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "naive",
+        "fault_type": "timeout",
+        "fault_intensity": 2,
+        "seed": 999,
+    })
+    assert res1.status_code == 200
+
+    res2 = client.post("/api/runs", json={
+        "scenario_id": "bad_deploy",
+        "agent_type": "naive",
+        "fault_type": "timeout",
+        "fault_intensity": 2,
+        "seed": 999,
+    })
+    assert res2.status_code == 429
+    assert "duplicate" in res2.json()["detail"].lower()
+    assert db_manager.count_runs() == 1

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { clearHistory, fetchReport, fetchRuns, predictRisk, seedDemoData } from '../api';
+import { clearHistory, fetchReport, fetchRuns, predictRisk } from '../api';
 import {
   PolicyConfig,
   PredictorPredictResponse,
@@ -103,20 +103,6 @@ export const InsightsExport: React.FC = () => {
     staleTime: 0,
   });
 
-  // Seed Demo Data Mutation
-  const [seedSuccessMsg, setSeedSuccessMsg] = useState<string>('');
-  const seedMutation = useMutation({
-    mutationFn: seedDemoData,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
-      queryClient.invalidateQueries({ queryKey: ['runs-list'] });
-      queryClient.invalidateQueries({ queryKey: ['runs-list-for-report'] });
-      queryClient.invalidateQueries({ queryKey: ['metrics'] });
-      queryClient.invalidateQueries({ queryKey: ['report-data'] });
-      setSeedSuccessMsg(`Loaded ${data.total_runs} demo runs`);
-      setTimeout(() => setSeedSuccessMsg(''), 3000);
-    },
-  });
 
   // Clear Mutation
   const clearMutation = useMutation({
@@ -482,20 +468,10 @@ export const InsightsExport: React.FC = () => {
               <Database className="w-4 h-4 text-indigo-400" /> Database Management
             </h2>
             <p className="text-xs text-slate-400">
-              Manage telemetry persistence, seed deterministic demo datasets, or purge test history.
+              Manage telemetry persistence or purge test history.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => seedMutation.mutate()}
-                disabled={seedMutation.isPending}
-                className="py-2 px-4 bg-indigo-950/60 hover:bg-indigo-900 border border-indigo-800 text-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
-              >
-                <Database className="w-3.5 h-3.5" />
-                {seedMutation.isPending ? 'Loading demo data...' : 'Load demo data'}
-              </button>
-
               <button
                 type="button"
                 onClick={() => setConfirmClearOpen(true)}
@@ -504,12 +480,6 @@ export const InsightsExport: React.FC = () => {
                 <Trash2 className="w-3.5 h-3.5" /> Clear All Run History
               </button>
             </div>
-
-            {seedSuccessMsg && (
-              <div className="text-xs text-emerald-400 flex items-center gap-1.5 pt-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> {seedSuccessMsg}
-              </div>
-            )}
           </div>
         </div>
       </div>
