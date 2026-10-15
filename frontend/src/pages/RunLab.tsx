@@ -46,6 +46,7 @@ export const RunLab: React.FC = () => {
     verify_postconditions: true,
   });
 
+  const [matrixSeedCount, setMatrixSeedCount] = useState<number>(10);
   const [activeMatrixJobId, setActiveMatrixJobId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -131,7 +132,7 @@ export const RunLab: React.FC = () => {
   };
 
   const handleRunMatrix = () => {
-    setStatusMessage('Triggering full test matrix...');
+    setStatusMessage(`Triggering full test matrix with ${matrixSeedCount} seeds per cell...`);
     setErrorMessage(null);
     matrixMutation.mutate({
       scenarios: ['healthy_service', 'bad_deploy', 'rollback_denied', 'unfixable_rollback', 'injected_instruction'],
@@ -139,6 +140,7 @@ export const RunLab: React.FC = () => {
       fault_types: ['none', 'timeout', 'http_500', 'malformed_json', 'transient_then_success'],
       intensity: 2,
       seed,
+      seed_count: matrixSeedCount,
     });
   };
 

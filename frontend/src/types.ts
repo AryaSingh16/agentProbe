@@ -86,6 +86,17 @@ export interface CassetteMetadata {
   model: string;
 }
 
+export interface MatrixCellStats {
+  passed: number;
+  total: number;
+  rate: number | null;
+  formatted: string;
+  ci_lower: number | null;
+  ci_upper: number | null;
+  ci_95: [number, number] | null;
+  is_low_sample: boolean;
+}
+
 export interface AggregateMetrics {
   total_runs: number;
   success_rate: number | null;
@@ -94,6 +105,22 @@ export interface AggregateMetrics {
   policy_violation_rate: number | null;
   avg_tool_calls: number | null;
   recovery_degradation: number | null;
+  success_count?: number;
+  success_formatted?: string;
+  success_ci_95?: [number, number] | null;
+  tool_errors_count?: number;
+  tool_calls_total?: number;
+  tool_error_formatted?: string;
+  tool_error_ci_95?: [number, number] | null;
+  faults_recovered_count?: number;
+  faults_encountered_count?: number;
+  recovery_formatted?: string;
+  recovery_ci_95?: [number, number] | null;
+  policy_violations_runs?: number;
+  policy_violation_formatted?: string;
+  policy_violation_ci_95?: [number, number] | null;
+  is_low_sample?: boolean;
+  metrics_note?: string;
 }
 
 export interface MinimalFaultSet {
@@ -154,5 +181,6 @@ export interface MatrixJobStatusResponse {
   created_at: string;
   completed_at?: string;
   heatmap?: Record<string, Record<string, number | null>>;
+  heatmap_details?: Record<string, Record<string, MatrixCellStats>>;
   summary?: AggregateMetrics;
 }

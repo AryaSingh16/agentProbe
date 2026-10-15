@@ -201,6 +201,16 @@ class PredictorPredictResponse(BaseModel):
     warning: str = "small-data, not validated for production use"
 
 
+class MatrixCellStats(BaseModel):
+    passed: int = 0
+    total: int = 0
+    rate: Optional[float] = None
+    formatted: str = "N/A"
+    ci_lower: Optional[float] = None
+    ci_upper: Optional[float] = None
+    is_low_sample: bool = True
+
+
 class AggregateMetrics(BaseModel):
     total_runs: int
     success_rate: Optional[float] = None
@@ -209,3 +219,28 @@ class AggregateMetrics(BaseModel):
     policy_violation_rate: Optional[float] = None
     avg_tool_calls: Optional[float] = None
     recovery_degradation: Optional[float] = None
+
+    # Additive fields with sample size and Wilson 95% Confidence Intervals
+    success_count: int = 0
+    success_formatted: str = "N/A"
+    success_ci_95: Optional[List[float]] = None
+
+    tool_errors_count: int = 0
+    tool_calls_total: int = 0
+    tool_error_formatted: str = "N/A"
+    tool_error_ci_95: Optional[List[float]] = None
+
+    faults_recovered_count: int = 0
+    faults_encountered_count: int = 0
+    recovery_formatted: str = "N/A"
+    recovery_ci_95: Optional[List[float]] = None
+
+    policy_violations_runs: int = 0
+    policy_violation_formatted: str = "N/A"
+    policy_violation_ci_95: Optional[List[float]] = None
+
+    is_low_sample: bool = False
+    metrics_note: str = (
+        "Naive and Robust are author-written reference policies; this performance gap validates that "
+        "the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general."
+    )

@@ -50,6 +50,8 @@ class MatrixJobRequest(BaseModel):
     fault_types: List[str] = Field(default=["none", "timeout", "http_500", "malformed_json", "transient_then_success"])
     intensity: int = Field(default=1, ge=0, le=5)
     seed: int = Field(default=42)
+    seed_count: int = Field(default=10, ge=1, le=20)
+    seeds: Optional[List[int]] = None
 
 
 class MatrixJobStatusResponse(BaseModel):
@@ -60,6 +62,7 @@ class MatrixJobStatusResponse(BaseModel):
     created_at: str
     completed_at: Optional[str] = None
     heatmap: Optional[Dict[str, Dict[str, Optional[float]]]] = None
+    heatmap_details: Optional[Dict[str, Dict[str, Any]]] = None
     summary: Optional[Dict[str, Any]] = None
 
 
@@ -121,61 +124,81 @@ def get_run(run_id: str):
 @router.get("/metrics")
 def get_metrics():
     """Calculate aggregate KPIs and reliability matrix heatmap across stored runs."""
-    runs = db_manager.list_runs(limit=1000)
+    from app.stats import format_rate_with_n, wilson_score_interval
+    runs = db_manager.list_runs(limit=2000)
     aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in runs])
 
-    # Compute heatmap: policy / agent x fault_type -> success_rate
-    heatmap: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    # Compute heatmap: policy / agent x fault_type -> success_rate and cell details
+    counts: Dict[str, Dict[str, Dict[str, int]]] = {}
     for r in runs:
         agent = r.agent_type
         ftype = r.fault_schedule[0].type if r.fault_schedule else "none"
-        if agent not in heatmap:
-            heatmap[agent] = {}
-        if ftype not in heatmap[agent]:
-            heatmap[agent][ftype] = {"passed": 0, "total": 0}
-        heatmap[agent][ftype]["total"] += 1
+        counts.setdefault(agent, {}).setdefault(ftype, {"passed": 0, "total": 0})
+        counts[agent][ftype]["total"] += 1
         if r.grader_result.verdict == "PASSED":
-            heatmap[agent][ftype]["passed"] += 1
+            counts[agent][ftype]["passed"] += 1
 
     formatted_heatmap: Dict[str, Dict[str, Optional[float]]] = {}
-    for ag, ftypes in heatmap.items():
+    heatmap_details: Dict[str, Dict[str, Any]] = {}
+
+    for ag, ftypes in counts.items():
         formatted_heatmap[ag] = {}
-        for ft, counts in ftypes.items():
-            formatted_heatmap[ag][ft] = round(counts["passed"] / counts["total"], 4) if counts["total"] > 0 else None
+        heatmap_details[ag] = {}
+        for ft, c in ftypes.items():
+            p = c["passed"]
+            t = c["total"]
+            r = round(p / t, 4) if t > 0 else None
+            lower, upper = wilson_score_interval(p, t)
+            formatted_heatmap[ag][ft] = r
+            heatmap_details[ag][ft] = {
+                "passed": p,
+                "total": t,
+                "rate": r,
+                "formatted": format_rate_with_n(p, t),
+                "ci_lower": lower,
+                "ci_upper": upper,
+                "ci_95": [lower, upper] if lower is not None else None,
+                "is_low_sample": (t < 10),
+            }
 
     return {
         "aggregates": aggs.model_dump(),
         "reliability_matrix": formatted_heatmap,
+        "reliability_matrix_details": heatmap_details,
     }
 
 
 def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
     """Worker task executing matrix experiments synchronously."""
+    from app.stats import format_rate_with_n, wilson_score_interval
     try:
         job = db_manager.get_matrix_job(job_id)
         if not job:
             return
 
-        total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types)
+        active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
+        total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
         executed_runs: List[RunResponse] = []
 
         for scen in req.scenarios:
             for ag in req.agents:
                 for ft in req.fault_types:
-                    f_intensity = 0 if ft == "none" else req.intensity
-                    run_req = RunCreateRequest(
-                        scenario_id=scen,
-                        agent_type=ag,
-                        fault_type=None if ft == "none" else ft,
-                        fault_intensity=f_intensity,
-                        seed=req.seed,
-                    )
-                    res = run_experiment(run_req)
-                    db_manager.save_run(res)
-                    executed_runs.append(res)
+                    for seed_val in active_seeds:
+                        f_intensity = 0 if ft == "none" else req.intensity
+                        run_req = RunCreateRequest(
+                            scenario_id=scen,
+                            agent_type=ag,
+                            fault_type=None if ft == "none" else ft,
+                            fault_intensity=f_intensity,
+                            seed=seed_val,
+                        )
+                        res = run_experiment(run_req)
+                        db_manager.save_run(res)
+                        executed_runs.append(res)
 
-        # Build heatmap
+        # Build heatmap and details
         heatmap: Dict[str, Dict[str, Optional[float]]] = {}
+        heatmap_details: Dict[str, Dict[str, Any]] = {}
         counts: Dict[str, Dict[str, Dict[str, int]]] = {}
 
         for r in executed_runs:
@@ -188,8 +211,23 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
 
         for ag, fts in counts.items():
             heatmap[ag] = {}
+            heatmap_details[ag] = {}
             for ft, c in fts.items():
-                heatmap[ag][ft] = round(c["passed"] / c["total"], 4) if c["total"] > 0 else None
+                p = c["passed"]
+                t = c["total"]
+                r = round(p / t, 4) if t > 0 else None
+                lower, upper = wilson_score_interval(p, t)
+                heatmap[ag][ft] = r
+                heatmap_details[ag][ft] = {
+                    "passed": p,
+                    "total": t,
+                    "rate": r,
+                    "formatted": format_rate_with_n(p, t),
+                    "ci_lower": lower,
+                    "ci_upper": upper,
+                    "ci_95": [lower, upper] if lower is not None else None,
+                    "is_low_sample": (t < 10),
+                }
 
         aggs = DeterministicGrader.compute_aggregates([r.model_dump() for r in executed_runs])
 
@@ -199,6 +237,7 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
             "total_runs": total_runs,
             "completed_runs": len(executed_runs),
             "heatmap": heatmap,
+            "heatmap_details": heatmap_details,
             "aggregates": aggs.model_dump(),
         })
         db_manager.save_matrix_job(job)
@@ -207,7 +246,6 @@ def _execute_matrix_job(job_id: str, req: MatrixJobRequest):
         job = db_manager.get_matrix_job(job_id)
         if job:
             job.status = "failed"
-            job.results_json = json.dumps({"error": str(e)})
             db_manager.save_matrix_job(job)
 
 
@@ -224,12 +262,13 @@ def start_matrix_job(req: MatrixJobRequest, background_tasks: BackgroundTasks):
     db_manager.save_matrix_job(job_record)
     background_tasks.add_task(_execute_matrix_job, job_id, req)
 
-    total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types)
+    active_seeds = req.seeds if (req.seeds and len(req.seeds) > 0) else [req.seed + i for i in range(req.seed_count)]
+    total_runs = len(req.scenarios) * len(req.agents) * len(req.fault_types) * len(active_seeds)
     return {
         "job_id": job_id,
         "status": "running",
         "total_runs": total_runs,
-        "message": "Matrix evaluation started in background",
+        "message": f"Matrix evaluation started in background across {len(active_seeds)} seeds per cell",
     }
 
 

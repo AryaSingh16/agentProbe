@@ -237,6 +237,8 @@ class DeterministicGrader:
                 total_faults_enc += grader.get("faults_encountered", 0)
                 total_faults_rec += grader.get("faults_recovered", 0)
 
+        from app.stats import format_rate_with_n, wilson_score_interval
+
         success_rate = round(passed / total, 4)
         tool_error_rate = round(total_tool_errors / total_tool_calls, 4) if total_tool_calls > 0 else None
         recovery_rate = round(total_faults_rec / total_faults_enc, 4) if total_faults_enc > 0 else None
@@ -252,6 +254,18 @@ class DeterministicGrader:
             fault_rate = fault_passed / len(faulted_runs)
             recovery_degradation = round(base_rate - fault_rate, 4)
 
+        succ_lower, succ_upper = wilson_score_interval(passed, total)
+        succ_ci = [succ_lower, succ_upper] if succ_lower is not None else None
+
+        err_lower, err_upper = wilson_score_interval(total_tool_errors, total_tool_calls)
+        err_ci = [err_lower, err_upper] if err_lower is not None else None
+
+        rec_lower, rec_upper = wilson_score_interval(total_faults_rec, total_faults_enc)
+        rec_ci = [rec_lower, rec_upper] if rec_lower is not None else None
+
+        viol_lower, viol_upper = wilson_score_interval(runs_with_violations, total)
+        viol_ci = [viol_lower, viol_upper] if viol_lower is not None else None
+
         return AggregateMetrics(
             total_runs=total,
             success_rate=success_rate,
@@ -260,4 +274,19 @@ class DeterministicGrader:
             policy_violation_rate=violation_rate,
             avg_tool_calls=avg_tool_calls,
             recovery_degradation=recovery_degradation,
+            success_count=passed,
+            success_formatted=format_rate_with_n(passed, total),
+            success_ci_95=succ_ci,
+            tool_errors_count=total_tool_errors,
+            tool_calls_total=total_tool_calls,
+            tool_error_formatted=format_rate_with_n(total_tool_errors, total_tool_calls),
+            tool_error_ci_95=err_ci,
+            faults_recovered_count=total_faults_rec,
+            faults_encountered_count=total_faults_enc,
+            recovery_formatted=format_rate_with_n(total_faults_rec, total_faults_enc),
+            recovery_ci_95=rec_ci,
+            policy_violations_runs=runs_with_violations,
+            policy_violation_formatted=format_rate_with_n(runs_with_violations, total),
+            policy_violation_ci_95=viol_ci,
+            is_low_sample=(total < 10),
         )

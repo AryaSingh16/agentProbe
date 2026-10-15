@@ -114,12 +114,16 @@ export const Overview: React.FC = () => {
             <span>TASK SUCCESS</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {aggs?.success_rate !== null && aggs?.success_rate !== undefined
+          <div className="text-xl font-bold text-white font-mono">
+            {aggs?.success_formatted && aggs.success_formatted !== 'N/A'
+              ? aggs.success_formatted
+              : aggs?.success_rate !== null && aggs?.success_rate !== undefined
               ? `${Math.round(aggs.success_rate * 100)}%`
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Goal & assertion completion</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {aggs?.success_ci_95 ? `95% CI: [${Math.round(aggs.success_ci_95[0]*100)}%, ${Math.round(aggs.success_ci_95[1]*100)}%]` : 'Goal & assertion completion'}
+          </div>
         </div>
 
         {/* Tool Error Rate */}
@@ -128,12 +132,16 @@ export const Overview: React.FC = () => {
             <span>TOOL ERROR RATE</span>
             <Wrench className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
+          <div className="text-xl font-bold text-white font-mono">
+            {aggs?.tool_error_formatted && aggs.tool_error_formatted !== 'N/A'
+              ? aggs.tool_error_formatted
+              : aggs?.tool_error_rate !== null && aggs?.tool_error_rate !== undefined
               ? `${Math.round(aggs.tool_error_rate * 100)}%`
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Faults & schema errors</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {aggs?.tool_error_ci_95 ? `95% CI: [${Math.round(aggs.tool_error_ci_95[0]*100)}%, ${Math.round(aggs.tool_error_ci_95[1]*100)}%]` : 'Errors per tool call'}
+          </div>
         </div>
 
         {/* Recovery Rate */}
@@ -142,12 +150,16 @@ export const Overview: React.FC = () => {
             <span>FAULT RECOVERY</span>
             <Percent className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
+          <div className="text-xl font-bold text-white font-mono">
+            {aggs?.recovery_formatted && aggs.recovery_formatted !== 'N/A'
+              ? aggs.recovery_formatted
+              : aggs?.recovery_rate !== null && aggs?.recovery_rate !== undefined
               ? `${Math.round(aggs.recovery_rate * 100)}%`
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Absorbed via policy retries</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {aggs?.recovery_ci_95 ? `95% CI: [${Math.round(aggs.recovery_ci_95[0]*100)}%, ${Math.round(aggs.recovery_ci_95[1]*100)}%]` : 'Encountered faults recovered'}
+          </div>
         </div>
 
         {/* Policy Violations */}
@@ -156,12 +168,16 @@ export const Overview: React.FC = () => {
             <span>POLICY VIOLATIONS</span>
             <ShieldAlert className="w-4 h-4 text-purple-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
-            {aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
+          <div className="text-xl font-bold text-white font-mono">
+            {aggs?.policy_violation_formatted && aggs.policy_violation_formatted !== 'N/A'
+              ? aggs.policy_violation_formatted
+              : aggs?.policy_violation_rate !== null && aggs?.policy_violation_rate !== undefined
               ? `${Math.round(aggs.policy_violation_rate * 100)}%`
-              : '0%'}
+              : '0/0 (0.0%)'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Injection & unauthorized token</div>
+          <div className="text-[11px] text-slate-400 mt-1">
+            {aggs?.policy_violation_ci_95 ? `95% CI: [${Math.round(aggs.policy_violation_ci_95[0]*100)}%, ${Math.round(aggs.policy_violation_ci_95[1]*100)}%]` : 'Runs triggering BLOCKED'}
+          </div>
         </div>
 
         {/* Avg Tool Calls */}
@@ -170,12 +186,12 @@ export const Overview: React.FC = () => {
             <span>AVG TOOL CALLS</span>
             <Layers className="w-4 h-4 text-blue-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
+          <div className="text-xl font-bold text-white font-mono">
             {aggs?.avg_tool_calls !== null && aggs?.avg_tool_calls !== undefined
               ? aggs.avg_tool_calls
               : 'N/A'}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Trajectory length</div>
+          <div className="text-[11px] text-slate-500 mt-1">Telemetry trajectory depth</div>
         </div>
 
         {/* Recovery Degradation */}
@@ -184,7 +200,7 @@ export const Overview: React.FC = () => {
             <span>DEGRADATION</span>
             <Flame className="w-4 h-4 text-rose-400" />
           </div>
-          <div className="text-2xl font-bold text-white font-mono">
+          <div className="text-xl font-bold text-white font-mono">
             {aggs?.recovery_degradation !== null && aggs?.recovery_degradation !== undefined
               ? `${Math.round(aggs.recovery_degradation * 100)}%`
               : 'N/A'}
@@ -203,7 +219,7 @@ export const Overview: React.FC = () => {
                 <Layers className="w-4 h-4 text-indigo-400" /> Reliability Matrix Heatmap
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Stress-test success rates cross-indexed by Policy Configuration vs Injected Fault Types.
+                Stress-test success rates with exact sample sizes (n) and 95% Wilson confidence intervals.
               </p>
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -226,6 +242,7 @@ export const Overview: React.FC = () => {
               <tbody className="divide-y divide-slate-800/60 font-mono">
                 {['naive', 'robust'].map((agent) => {
                   const agentData = heatmap[agent] || {};
+                  const agentDetails = metricsData?.reliability_matrix_details?.[agent] || {};
                   return (
                     <tr key={agent} className="hover:bg-slate-800/30 transition">
                       <td className="py-3 px-3 font-semibold text-slate-200 capitalize flex items-center gap-1.5">
@@ -235,11 +252,26 @@ export const Overview: React.FC = () => {
                       </td>
                       {faultTypes.map((ft) => {
                         const val = agentData[ft];
+                        const detail = agentDetails[ft];
                         const displayVal = val !== undefined && val !== null ? `${Math.round(val * 100)}%` : 'N/A';
+                        const ciTooltip = detail?.ci_lower !== null && detail?.ci_lower !== undefined
+                          ? `Sample: ${detail.passed}/${detail.total} passed\n95% Wilson CI: [${(detail.ci_lower*100).toFixed(1)}%, ${(detail.ci_upper*100).toFixed(1)}%]`
+                          : 'No runs recorded for this cell';
                         return (
                           <td key={ft} className="py-2 px-2 text-center">
-                            <div className={`py-1 px-2 rounded border text-xs font-bold ${getHeatmapColor(val)}`}>
-                              {displayVal}
+                            <div
+                              title={ciTooltip}
+                              className={`py-1.5 px-2 rounded border text-xs font-bold flex flex-col items-center justify-center cursor-help ${getHeatmapColor(val)}`}
+                            >
+                              <span>{displayVal}</span>
+                              {detail && detail.total > 0 && (
+                                <span className="text-[10px] font-normal opacity-80">{detail.passed}/{detail.total}</span>
+                              )}
+                              {detail && detail.is_low_sample && detail.total > 0 && (
+                                <span className="text-[8px] font-sans tracking-tight text-amber-300 bg-amber-950/80 px-1 rounded border border-amber-800/60 mt-0.5">
+                                  low sample (n&lt;10)
+                                </span>
+                              )}
                             </div>
                           </td>
                         );
@@ -250,11 +282,10 @@ export const Overview: React.FC = () => {
               </tbody>
             </table>
           </div>
-          {Object.keys(heatmap).length === 0 && (
-            <div className="py-8 text-center text-slate-500 text-xs">
-              No matrix data yet. Run experiments from the Run Lab to populate this heatmap.
-            </div>
-          )}
+
+          <div className="mt-4 p-3 rounded-lg bg-slate-950/70 border border-slate-800/80 text-[11px] text-slate-400 leading-relaxed">
+            <strong className="text-slate-300 font-semibold">Metrics Note:</strong> Naive and Robust are author-written reference policies; this performance gap validates that the test harness reliably separates weak from hardened policies, and is not a discovery about AI agents in general.
+          </div>
         </div>
 
         {/* Baseline vs Faulted Chart (1 col) */}
