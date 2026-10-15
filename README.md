@@ -139,55 +139,63 @@ flowchart TD
 ## Engineering Practices and Design Decisions
 
 ### Practices
-- **Typed Schemas**: Strict request and response validation using Pydantic models in FastAPI (`backend/app/schemas.py`).
-- **Deterministic Seeded Execution**: In-memory simulation seeded via `random.Random(seed)` ensures 100% reproducible execution traces across runs.
-- **Rule-Based Grading**: Zero reliance on LLM judges. Grades are computed using deterministic state assertion checks against environment logs (`backend/app/grader.py`).
-- **Write-Invalidated Caching**: Frontend React Query mutation hooks strictly invalidate queries on state-altering actions, preventing stale UI metrics.
-- **Additive Database Migrations**: SQLite schema changes use additive column checks (`PRAGMA table_info`) preserving historical data without destructing previous runs (`backend/app/db.py`).
-- **Secret Scanning Tests**: Automated test suite (`backend/tests/test_secret_scanner.py`) audits cassettes, environment templates, and tracked files for leaked API keys.
-- **Claims Audit Test**: Automated regression test (`backend/tests/test_claims_audit.py`) guarantees marketing overclaims do not enter code, documentation, or UI.
-- **Container Healthchecks**: Built-in healthcheck probes for both frontend and backend ensure dependent services only start when dependencies are healthy (`docker-compose.yml`).
-- **Non-Root Container Execution**: Backend Docker image drops privileges to non-root `appuser` (UID 10001) (`backend/Dockerfile`).
+
+- **Typed schemas:** request and response validation with Pydantic models across the FastAPI layer.
+- **Seeded, reproducible simulation:** the simulated environment and fault schedules are seeded, so the same configuration produces the same trace.
+- **Assertion-based grading:** results are computed from environment state, evidence and policy checks, so scores are repeatable and independent of any model's judgement.
+- **Cache invalidation on write:** metrics are recalculated whenever runs are added or cleared, and the dashboard refreshes immediately after each run.
+- **Additive database migrations:** schema changes add columns without discarding existing run history.
+- **Secret scanning tests:** automated tests check tracked files, recordings and templates for leaked credentials.
+- **Documentation consistency checks:** automated tests keep the README and UI wording aligned with what the project does.
+- **Container hardening:** health checks on both services and a non-root user in the backend image.
 
 ### Design Decisions
-- **Why deterministic grading**: LLM-as-a-judge introduces non-determinism, grading drift, and recurring API costs. Rule-based graders check exact state transitions, evidence lists, and authorization invariants with zero ambiguity.
-- **Why delta-debugging (ddmin)**: When complex multi-fault scenarios fail, identifying the minimal failing condition manually is tedious. `ddmin` systematically isolates the minimal fault subset in $O(n \log n)$ simulator re-runs.
-- **Why a simulator**: Testing infrastructure agents on real cloud resources is slow, expensive, and dangerous. An in-memory mock environment allows exhaustive combinatorial matrix testing with zero cloud costs and zero risk of accidental downtime.
 
-### Reproducibility
-- **Environment Variables**:
-  | Variable | Purpose | Default | Required? |
-  |---|---|---|---|
-  | `ENVIRONMENT` | Application mode (`development` or `production`) | `development` | No |
-  | `DATABASE_URL` | SQLite connection URL | `sqlite:///./data/agentprobe.db` | No |
-  | `CORS_ORIGINS` | Allowed origins for API requests | `http://localhost:3000` | No |
-  | `LLM_BASE_URL` | OpenAI-compatible API base URL | `https://generativelanguage.googleapis.com/v1beta/openai/` | No |
-  | `LLM_API_KEY` | API key for live model execution | *(empty)* | Optional (only for live mode) |
-  | `LLM_MODEL` | Target language model identifier | `models/gemini-3.5-flash` | No |
-  | `LLM_MODE` | Model execution mode (`replay` or `live`) | `replay` | No |
+- **Why deterministic grading:** model-based judges can drift between runs and add cost. Rule-based checks on state transitions, evidence and authorization give repeatable scores you can compare across experiments, and an LLM judge can be layered on for subjective criteria.
+- **Why delta debugging (ddmin):** when several faults occur together, finding which one actually causes the failure by hand is slow. ddmin narrows a fault schedule to a minimal failing subset through counterfactual re-runs, and each re-run is recorded as evidence.
+- **Why a simulator:** testing agents against real infrastructure is slow, costly and risky. An in-memory environment allows systematic matrix testing across scenarios, faults and seeds with no side effects.
 
-- **How to Reset Data**:
-  - Through the UI: Click **Clear history** in the top navigation bar (requires confirmation).
-  - Through the API:
-    ```bash
-    curl -X DELETE "http://localhost:8000/api/history?confirm=true"
-    ```
-  - Through Docker:
-    ```bash
-    docker compose down -v
-    ```
+## Reproducibility
 
-### Troubleshooting
-1. **Port in use (`8000` or `3000`)**: If default ports conflict with existing services, override them:
-   ```bash
-   PORT_API=8001 PORT_WEB=3001 docker compose up --build
-   ```
-2. **Docker daemon not running**: Ensure Docker Desktop or the dockerd service is running prior to starting containers.
-3. **Live mode rate limits (HTTP 429)**: Free-tier endpoints enforce strict requests-per-minute limits. AgentProbe automatically backs off; switch to Recorded mode if quota is exhausted.
-4. **Missing API key**: If `LLM_API_KEY` is not set, Live mode is disabled in the UI; use Recorded mode or Basic/Resilient policies, or add a key to `.env`.
-5. **Empty history after clearing**: Clearing history deletes all run records and prevents auto-reseeding. Run single runs in **Run Lab** or trigger **Run Matrix** to generate fresh runs.
+### Configuration
 
----
+Copy `.env.example` to `.env` and adjust as needed. All variables are optional; the app runs fully offline with the defaults.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ENVIRONMENT` | Application mode (`development` or `production`) | `development` |
+| `DATABASE_URL` | SQLite connection URL | `sqlite:///./data/agentprobe.db` |
+| `CORS_ORIGINS` | Allowed origins for API requests | `http://localhost:3000` |
+| `PORT_WEB` | Port for the web dashboard | `3000` |
+| `PORT_API` | Port for the API | `8000` |
+| `LLM_BASE_URL` | OpenAI-compatible API base URL | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| `LLM_API_KEY` | API key for live model runs (leave empty to disable live mode) | empty |
+| `LLM_MODEL` | Model identifier used for live runs | set in `.env.example` |
+| `LLM_MODE` | `replay` (offline) or `live` | `replay` |
+
+Keep your API key in `.env` only. The file is git-ignored and must never be committed.
+
+### Resetting data
+
+- **From the UI:** use **Clear history** on the Insights & Export page (asks for confirmation).
+- **From the API:**
+```bash
+  curl -X DELETE "http://localhost:8000/api/history?confirm=true"
+```
+- **Full reset, including the database volume:**
+```bash
+  docker compose down -v
+```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Port already in use | Set `PORT_WEB` and `PORT_API` to free ports in `.env`, then run `docker compose up --build` again. |
+| Docker is not running | Start Docker Desktop (or the Docker service) and retry. |
+| Live mode returns HTTP 429 | The provider's rate limit was reached. AgentProbe retries with backoff, and a run that still fails is marked "Not completed". Wait a few minutes, or use Recorded mode. |
+| Live model option is disabled | No API key is set. Add `LLM_API_KEY` to `.env` and restart the containers. |
+| History is empty after clearing | Expected. Clearing removes all runs and nothing is re-created automatically. Start a run from **Run Lab** or click **Run full matrix**. |
 
 ## API Overview
 
@@ -226,7 +234,7 @@ npm --prefix frontend run build
 python scripts/verify_docker.py
 ```
 
-### Verification Results (October 16, 2026)
+### Verification Results 
 - **Backend Tests**: 56 passed in 14.58s (`pytest backend/tests -v`).
 - **Frontend Tests**: 12 passed in 6.16s (`vitest run --run`).
 - **Frontend Build**: TypeScript typecheck and Vite bundling succeeded in 7.83s.
