@@ -532,7 +532,7 @@ def test_llm_without_cassette_rejected_with_no_recording():
     initial_count = db_manager.count_runs()
 
     res = client.post("/api/runs", json={
-        "scenario_id": "healthy_service",
+        "scenario_id": "unfixable_rollback",
         "agent_type": "llm",
         "seed": 42,
     })
