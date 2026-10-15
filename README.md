@@ -32,10 +32,7 @@ Captured from local deployment at `http://localhost:3000`. Instructions for capt
 - **Automated Root-Cause Diagnosis & Shrinking**: Isolates minimal fault subsets using delta debugging (`ddmin`) and cites exact event IDs in execution traces without LLM judges.
 - **Simulation-Based Risk Estimation**: Fits regularized logistic models to evaluate how toggling guardrails shifts failure probability across simulated fault configurations.
 
----
-
-## Intended Use
-
+### Intended Use
 AgentProbe is a learning and portfolio project for studying agent reliability in a simulated environment, not a production safety tool.
 
 ---
@@ -134,44 +131,35 @@ flowchart TD
 - **Container Healthchecks**: Built-in healthcheck probes for both frontend and backend ensure dependent services only start when dependencies are healthy (`docker-compose.yml`).
 - **Non-Root Container Execution**: Backend Docker image drops privileges to non-root `appuser` (UID 10001) (`backend/Dockerfile`).
 
----
-
-## Design Decisions
-
+### Design Decisions
 - **Why deterministic grading**: LLM-as-a-judge introduces non-determinism, grading drift, and recurring API costs. Rule-based graders check exact state transitions, evidence lists, and authorization invariants with zero ambiguity.
 - **Why delta-debugging (ddmin)**: When complex multi-fault scenarios fail, identifying the minimal failing condition manually is tedious. `ddmin` systematically isolates the minimal fault subset in $O(n \log n)$ simulator re-runs.
 - **Why a simulator**: Testing infrastructure agents on real cloud resources is slow, expensive, and dangerous. An in-memory mock environment allows exhaustive combinatorial matrix testing with zero cloud costs and zero risk of accidental downtime.
 
----
+### Reproducibility
+- **Environment Variables**:
+  | Variable | Purpose | Default | Required? |
+  |---|---|---|---|
+  | `ENVIRONMENT` | Application mode (`development` or `production`) | `development` | No |
+  | `DATABASE_URL` | SQLite connection URL | `sqlite:///./data/agentprobe.db` | No |
+  | `CORS_ORIGINS` | Allowed origins for API requests | `http://localhost:3000` | No |
+  | `LLM_BASE_URL` | OpenAI-compatible API base URL | `https://generativelanguage.googleapis.com/v1beta/openai/` | No |
+  | `LLM_API_KEY` | API key for live model execution | *(empty)* | Optional (only for live mode) |
+  | `LLM_MODEL` | Target language model identifier | `models/gemini-3.5-flash` | No |
+  | `LLM_MODE` | Model execution mode (`replay` or `live`) | `replay` | No |
 
-## Reproducibility
+- **How to Reset Data**:
+  - Through the UI: Click **Clear history** in the top navigation bar (requires confirmation).
+  - Through the API:
+    ```bash
+    curl -X DELETE "http://localhost:8000/api/history?confirm=true"
+    ```
+  - Through Docker:
+    ```bash
+    docker compose down -v
+    ```
 
-### Environment Variables
-| Variable | Purpose | Default | Required? |
-|---|---|---|---|
-| `ENVIRONMENT` | Application mode (`development` or `production`) | `development` | No |
-| `DATABASE_URL` | SQLite connection URL | `sqlite:///./data/agentprobe.db` | No |
-| `CORS_ORIGINS` | Allowed origins for API requests | `http://localhost:3000` | No |
-| `LLM_BASE_URL` | OpenAI-compatible API base URL | `https://generativelanguage.googleapis.com/v1beta/openai/` | No |
-| `LLM_API_KEY` | API key for live model execution | *(empty)* | Optional (only for live mode) |
-| `LLM_MODEL` | Target language model identifier | `models/gemini-3.5-flash` | No |
-| `LLM_MODE` | Model execution mode (`replay` or `live`) | `replay` | No |
-
-### How to Reset Data
-- **Through the UI**: Click **Clear history** in the top navigation bar (requires confirmation).
-- **Through the API**:
-  ```bash
-  curl -X DELETE "http://localhost:8000/api/history?confirm=true"
-  ```
-- **Through Docker**:
-  ```bash
-  docker compose down -v
-  ```
-
----
-
-## Troubleshooting
-
+### Troubleshooting
 1. **Port in use (`8000` or `3000`)**: If default ports conflict with existing services, override them:
    ```bash
    PORT_API=8001 PORT_WEB=3001 docker compose up --build
