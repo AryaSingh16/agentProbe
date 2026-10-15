@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { clearHistory, predictRisk, trainPredictor } from '../api';
+import { clearHistory, generateSimulatorRuns, predictRisk, trainPredictor } from '../api';
 import {
   PolicyConfig,
   PredictorPredictResponse,
@@ -16,6 +16,7 @@ import {
   FileCode,
   FileText,
   HelpCircle,
+  PlusCircle,
   Sparkles,
   Trash2,
   TrendingUp,
@@ -67,6 +68,17 @@ export const InsightsExport: React.FC = () => {
     onSuccess: (data) => setTrainStats(data),
   });
 
+  // Generate Real Simulator Runs Mutation
+  const generateRunsMutation = useMutation({
+    mutationFn: () => generateSimulatorRuns(50),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recent-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['runs-list'] });
+      queryClient.invalidateQueries({ queryKey: ['metrics'] });
+      refetchReport();
+    },
+  });
+
   // Clear Mutation
   const clearMutation = useMutation({
     mutationFn: clearHistory,
@@ -103,42 +115,122 @@ export const InsightsExport: React.FC = () => {
                 <TrendingUp className="w-4 h-4 text-indigo-400" /> Learned Failure-Risk Predictor
               </h2>
               <p className="text-xs text-slate-400">
-                scikit-learn classifier evaluating scenario, policy guardrails, and fault parameters.
+                scikit-learn classifier trained strictly on real stored runs (zero synthetic data).
               </p>
             </div>
-            <button
-              onClick={() => trainMutation.mutate()}
-              disabled={trainMutation.isPending}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded text-xs font-medium flex items-center gap-1.5 border border-slate-700"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              {trainMutation.isPending ? 'Training Model...' : 'Train / Retrain Model'}
-            </button>
-          </div>
-
-          {/* Prominent Small-Data Warning */}
-          <div className="p-3 bg-amber-950/20 border border-amber-900/50 rounded-lg text-xs text-amber-300 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-semibold">Notice:</span> Small-data model trained on synthetic and stored reference runs.
-              <strong> Not validated for production mission-critical deployment.</strong>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => generateRunsMutation.mutate()}
+                disabled={generateRunsMutation.isPending}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded text-xs font-medium flex items-center gap-1.5 border border-slate-700"
+                title="Generates 50 real seeded simulator runs"
+              >
+                <PlusCircle className="w-3.5 h-3.5 text-emerald-400" />
+                {generateRunsMutation.isPending ? 'Simulating...' : 'Generate Real Runs (+50)'}
+              </button>
+              <button
+                onClick={() => trainMutation.mutate()}
+                disabled={trainMutation.isPending}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded text-xs font-medium flex items-center gap-1.5 shadow"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-white" />
+                {trainMutation.isPending ? 'Training...' : 'Train on Real Runs'}
+              </button>
             </div>
           </div>
 
-          {/* Model Holdout Stats if trained */}
-          {trainStats && (
-            <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 grid grid-cols-3 gap-2 text-xs text-center font-mono">
-              <div>
-                <span className="text-slate-500 text-[10px] uppercase">Accuracy:</span>
-                <div className="text-emerald-400 font-bold">{Math.round(trainStats.accuracy * 100)}%</div>
+          {/* Model Status & Small-Data Handling */}
+          {trainStats ? (
+            <>
+              {trainStats.is_insufficient_data ? (
+                <div className="p-3 bg-rose-950/30 border border-rose-800 rounded-lg text-xs text-rose-300 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold uppercase tracking-wider text-rose-200">
+                      Insufficient data: metrics are not meaningful
+                    </div>
+                    <div className="text-[11px] text-rose-300/90 mt-0.5">
+                      Sample size n = {trainStats.sample_size} runs is below the required 200-run threshold. Trained strictly on real stored runs (zero synthetic rows). Accuracy and ROC AUC are greyed out to prevent false confidence.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 bg-emerald-950/20 border border-emerald-800/60 rounded-lg text-xs text-emerald-300 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">Trained on real stored runs:</span> n = {trainStats.sample_size} runs (meets &ge; 200 threshold). Grouped leakage-safe split verified.
+                  </div>
+                </div>
+              )}
+
+              {/* Model Holdout Stats with greyed-out state if insufficient data */}
+              <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 grid grid-cols-3 gap-2 text-xs text-center font-mono">
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase">Accuracy:</span>
+                  {trainStats.is_insufficient_data ? (
+                    <div>
+                      <div className="text-slate-600 line-through">{Math.round(trainStats.accuracy * 100)}%</div>
+                      <div className="text-[9px] text-rose-400 uppercase font-sans">Greyed out (n &lt; 200)</div>
+                    </div>
+                  ) : (
+                    <div className="text-emerald-400 font-bold">{Math.round(trainStats.accuracy * 100)}%</div>
+                  )}
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase">ROC AUC:</span>
+                  {trainStats.is_insufficient_data ? (
+                    <div>
+                      <div className="text-slate-600 line-through">{trainStats.auc !== null ? trainStats.auc : 'N/A'}</div>
+                      <div className="text-[9px] text-rose-400 uppercase font-sans">Greyed out (n &lt; 200)</div>
+                    </div>
+                  ) : (
+                    <div className="text-indigo-400 font-bold">{trainStats.auc !== null ? trainStats.auc : 'N/A'}</div>
+                  )}
+                </div>
+                <div>
+                  <span className="text-slate-500 text-[10px] uppercase">Sample Size:</span>
+                  <div className="text-slate-200 font-bold">{trainStats.sample_size} runs</div>
+                  <div className="text-[9px] text-slate-400 uppercase font-sans">Real runs only</div>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-500 text-[10px] uppercase">ROC AUC:</span>
-                <div className="text-indigo-400 font-bold">{trainStats.auc !== null ? trainStats.auc : 'N/A'}</div>
+
+              {/* Class balance and majority baseline comparison */}
+              <div className="p-2.5 bg-slate-950/80 rounded-lg border border-slate-800/80 text-xs space-y-1">
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span>Class Balance:</span>
+                  <span className="font-mono text-slate-300">
+                    Failed: {trainStats.class_balance?.failed ?? 0} | Passed: {trainStats.class_balance?.passed ?? 0}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span>Majority-Class Baseline:</span>
+                  <span className="font-mono text-slate-300">
+                    {Math.round((trainStats.majority_class_baseline_accuracy ?? 0) * 100)}%
+                  </span>
+                </div>
+                <div className="text-[11px] pt-1 border-t border-slate-800/60 font-medium">
+                  {trainStats.beats_baseline === false ? (
+                    <span className="text-amber-400 flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      Model does not beat majority-class baseline.
+                    </span>
+                  ) : trainStats.beats_baseline === true ? (
+                    <span className="text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                      Model beats majority-class baseline.
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">{trainStats.baseline_comparison || 'No baseline comparison available.'}</span>
+                  )}
+                </div>
               </div>
+            </>
+          ) : (
+            <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg text-xs text-slate-400 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
               <div>
-                <span className="text-slate-500 text-[10px] uppercase">Sample Size:</span>
-                <div className="text-slate-200">{trainStats.sample_size} runs</div>
+                <span className="font-semibold text-slate-300">Real Stored Runs Training:</span> Zero synthetic permutations.
+                Requires &ge; 200 real runs for meaningful metrics. Click <em>Generate Real Runs</em> to run simulations, then <em>Train on Real Runs</em>.
               </div>
             </div>
           )}

@@ -152,3 +152,16 @@ export async function clearHistory(): Promise<void> {
   const res = await fetch(`${API_BASE}/history?confirm=true`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to clear run history');
 }
+
+export async function generateSimulatorRuns(count = 50): Promise<{
+  status: string;
+  generated_count: number;
+  total_runs_in_db: number;
+  message: string;
+}> {
+  const res = await fetch(`${API_BASE}/simulator/generate?count=${count}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error('Failed to generate simulator runs');
+  return res.json();
+}

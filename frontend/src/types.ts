@@ -164,6 +164,15 @@ export interface PredictorTrainResponse {
   sample_size: number;
   warning: string;
   feature_importances: Record<string, number>;
+  status?: string;
+  is_insufficient_data?: boolean;
+  metrics_meaningful?: boolean;
+  class_balance?: { failed: number; passed: number };
+  majority_class_baseline_accuracy?: number;
+  beats_baseline?: boolean | null;
+  baseline_comparison?: string;
+  split_strategy?: string;
+  real_runs_only?: boolean;
 }
 
 export interface PredictorPredictResponse {

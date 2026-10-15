@@ -149,6 +149,7 @@ class RunResponse(BaseModel):
     grader_result: GraderResult
     metrics: RunMetrics
     created_at: str
+    provenance: str = "simulator-generated"
 
 
 class MinimalFaultSet(BaseModel):
@@ -185,6 +186,16 @@ class PredictorTrainResponse(BaseModel):
     sample_size: int
     warning: str = "small-data, not validated for production use"
     feature_importances: Dict[str, float]
+    # Additive fields for honesty & real data requirements
+    status: str = "Insufficient data: metrics are not meaningful"
+    is_insufficient_data: bool = True
+    metrics_meaningful: bool = False
+    class_balance: Dict[str, int] = Field(default_factory=dict)
+    majority_class_baseline_accuracy: float = 0.0
+    beats_baseline: Optional[bool] = None
+    baseline_comparison: str = ""
+    split_strategy: str = "grouped_scenario_seed"
+    real_runs_only: bool = True
 
 
 class PredictorPredictRequest(BaseModel):

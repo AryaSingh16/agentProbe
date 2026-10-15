@@ -355,6 +355,48 @@ def predict_risk(req: PredictorPredictRequest):
     return predictor_engine.predict(req)
 
 
+@router.post("/simulator/generate")
+def generate_simulator_runs(count: int = Query(default=50, ge=1, le=250)):
+    """
+    Executes real seeded simulator runs across varied scenarios, policies, and faults,
+    labelled as simulator-generated and persisted in the database.
+    """
+    scenarios = ["healthy_service", "bad_deploy", "rollback_denied", "unfixable_rollback", "injected_instruction"]
+    agents = ["naive", "robust"]
+    fault_types = ["none", "timeout", "http_500", "malformed_json", "empty_response", "transient_then_success"]
+
+    generated = []
+    current_seed = 500
+    idx = 0
+
+    while len(generated) < count:
+        scen = scenarios[idx % len(scenarios)]
+        ag = agents[(idx // len(scenarios)) % len(agents)]
+        ft = fault_types[(idx // (len(scenarios) * len(agents))) % len(fault_types)]
+        intensity = (idx % 3) + 1 if ft != "none" else 0
+        seed = current_seed + idx
+
+        req = RunCreateRequest(
+            scenario_id=scen,
+            agent_type=ag,
+            fault_type=None if ft == "none" else ft,
+            fault_intensity=intensity,
+            seed=seed,
+        )
+        res = run_experiment(req)
+        db_manager.save_run(res)
+        generated.append(res.id)
+        idx += 1
+
+    total_runs = len(db_manager.list_runs(limit=10000))
+    return {
+        "status": "ok",
+        "generated_count": len(generated),
+        "total_runs_in_db": total_runs,
+        "message": f"Successfully generated {len(generated)} real simulator runs (labelled simulator-generated).",
+    }
+
+
 @router.get("/export/runs.json")
 def export_runs_json():
     """Download full JSON archive of runs and aggregated metrics."""
